@@ -1,0 +1,8 @@
+# build outputs (build.sh)
+/out/
+/assets/
+*.apk
+*.idsig
+
+# APKs pulled from the device for reference
+/_apk/
