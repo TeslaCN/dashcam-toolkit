@@ -1,86 +1,70 @@
-#!/bin/bash
-# Gradle-free build for the Dashcam app.
-#
-#   ./build.sh            # builds out/dashcam.apk and embeds the full project into assets/
-#
-# Requirements: Android SDK (build-tools + platform), JDK 8 (javac) and JDK 11+ (d8).
-# The script auto-detects SDK/JDK locations; override with ANDROID_HOME / JAVAC_BIN / JAVA_BIN.
+#!/usr/bin/env bash
+# 免 Gradle 构建：aapt2 + javac + d8 + zipalign + apksigner
+# 产物：out/drive.apk（签名沿用 signing/debug.jks，可原地覆盖安装重建版）
+# 每次构建都会把整个工程打包进 APK 的 assets/drive-source.zip，随时可解出重建：
+#   unzip drive.apk assets/drive-source.zip -d /tmp/drive && cd /tmp/drive && unzip -q drive-source.zip && ./build.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 
 # ---------------------------------------------------------------- toolchain
-SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
-if [ ! -d "$SDK" ]; then
-  echo "Android SDK not found (set ANDROID_HOME). Looked in: $SDK" >&2
-  exit 1
-fi
+SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+[ -d "$SDK" ] || SDK="$HOME/Library/Android/sdk"          # macOS 默认路径兜底
+[ -d "$SDK" ] || { echo "Android SDK not found (set ANDROID_HOME)" >&2; exit 1; }
+
 BT="$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1)"
-if [ -z "${BT:-}" ]; then echo "no build-tools in $SDK" >&2; exit 1; fi
-if [ -f "$SDK/platforms/android-33/android.jar" ]; then
-  PLATFORM="$SDK/platforms/android-33/android.jar"
-else
-  PLATFORM="$(ls "$SDK"/platforms/android-*/android.jar 2>/dev/null | sort -V | tail -1)"
-fi
+[ -n "${BT:-}" ] || { echo "no build-tools in $SDK" >&2; exit 1; }
+
+PLATFORM="$SDK/platforms/android-36.1/android.jar"
+[ -f "$PLATFORM" ] || PLATFORM="$(ls "$SDK"/platforms/android-*/android.jar 2>/dev/null | sort -V | tail -1)"
 [ -n "${PLATFORM:-}" ] || { echo "no android.jar in $SDK/platforms" >&2; exit 1; }
 
-pick_java_home() {
-  local v p
-  for v in "$@"; do
-    if [ -x /usr/libexec/java_home ]; then
-      p="$(/usr/libexec/java_home -v "$v" 2>/dev/null || true)"
-      if [ -n "$p" ] && [ -x "$p/bin/java" ]; then echo "$p"; return 0; fi
-    fi
-  done
-  return 1
-}
-JAVA8_HOME="$(pick_java_home 1.8 8 || true)"
-JAVA11_HOME="$(pick_java_home 11 17 21 || true)"
-JAVAC="${JAVAC_BIN:-${JAVA8_HOME:+$JAVA8_HOME/bin/javac}}"
-JAVAC="${JAVAC:-javac}"
-JAVA_EXE="${JAVA_BIN:-${JAVA11_HOME:+$JAVA11_HOME/bin/java}}"
-JAVA_EXE="${JAVA_EXE:-java}"
-KEYTOOL="${KEYTOOL_BIN:-${JAVA8_HOME:+$JAVA8_HOME/bin/keytool}}"
-KEYTOOL="${KEYTOOL:-keytool}"
+JAVAC="${JAVAC_BIN:-javac}"
+JAVA="${JAVA_BIN:-java}"
+KEYTOOL="${KEYTOOL_BIN:-keytool}"
+
+MIN_SDK=29
+TARGET_SDK=29
+OUT=out
+APK="$OUT/drive.apk"
 
 echo "SDK:        $SDK"
 echo "build-tools:$BT"
 echo "platform:   $PLATFORM"
 echo "javac:      $JAVAC"
-echo "java(d8):   $JAVA_EXE"
 
-rm -rf out assets
-mkdir -p out/compiled out/classes out/dex out/gen assets
+rm -rf "$OUT" assets
+mkdir -p "$OUT/compiled" "$OUT/classes" "$OUT/dex" "$OUT/gen" assets
 
-# ------------------------------------------------- embed the whole project
-# The APK carries a complete, buildable copy of this project so it can be
-# extracted and rebuilt at any time (unzip dashcam.apk assets/dashcam-source.zip).
+# ------------------------------------------------- 把整个工程塞进 APK
 echo "== packaging source bundle =="
-zip -qr assets/dashcam-source.zip src res signing AndroidManifest.xml build.sh README.md
-echo "   assets/dashcam-source.zip: $(du -h assets/dashcam-source.zip | cut -f1)"
+BUNDLE="src res signing AndroidManifest.xml build.sh README.md"
+[ -d docs ] && BUNDLE="$BUNDLE docs"
+[ -d test ] && BUNDLE="$BUNDLE test"
+zip -qr assets/drive-source.zip $BUNDLE
+echo "   assets/drive-source.zip: $(du -h assets/drive-source.zip | cut -f1)"
 
 echo "== aapt2 compile =="
-"$BT/aapt2" compile --dir res -o out/compiled/res.zip
+"$BT/aapt2" compile --dir res -o "$OUT/compiled/res.zip"
 
 echo "== aapt2 link =="
-"$BT/aapt2" link -o out/base.apk -I "$PLATFORM" \
+"$BT/aapt2" link -o "$OUT/base.apk" -I "$PLATFORM" \
     --manifest AndroidManifest.xml \
-    --min-sdk-version 26 --target-sdk-version 29 \
-    -A assets \
-    --java out/gen -R out/compiled/res.zip --auto-add-overlay
+    --min-sdk-version $MIN_SDK --target-sdk-version $TARGET_SDK \
+    -A assets --java "$OUT/gen" -R "$OUT/compiled/res.zip" --auto-add-overlay
 
 echo "== javac =="
+find src "$OUT/gen" -name '*.java' > "$OUT/sources.txt"
 "$JAVAC" -source 8 -target 8 -encoding UTF-8 -g -nowarn \
-    -classpath "$PLATFORM" -d out/classes \
-    $(find src out/gen -name '*.java')
+    -classpath "$PLATFORM" -d "$OUT/classes" @"$OUT/sources.txt"
 
 echo "== d8 =="
-"$JAVA_EXE" -cp "$BT/lib/d8.jar" com.android.tools.r8.D8 --release --min-api 26 \
-    --lib "$PLATFORM" --output out/dex $(find out/classes -name '*.class')
+"$JAVA" -cp "$BT/lib/d8.jar" com.android.tools.r8.D8 --release --min-api $MIN_SDK \
+    --lib "$PLATFORM" --output "$OUT/dex" $(find "$OUT/classes" -name '*.class')
 
 echo "== package =="
-cp out/base.apk out/unaligned.apk
-(cd out/dex && zip -q -u ../unaligned.apk classes.dex)
-"$BT/zipalign" -f 4 out/unaligned.apk out/aligned.apk
+cp "$OUT/base.apk" "$OUT/unaligned.apk"
+(cd "$OUT/dex" && zip -q -u ../unaligned.apk classes.dex)
+"$BT/zipalign" -f 4 "$OUT/unaligned.apk" "$OUT/aligned.apk"
 
 if [ ! -f signing/debug.jks ]; then
   echo "== generating debug keystore =="
@@ -88,8 +72,9 @@ if [ ! -f signing/debug.jks ]; then
       -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
       -dname "CN=Android Debug,O=Android,C=US"
 fi
-"$BT/apksigner" sign --ks signing/debug.jks --ks-pass pass:android --key-pass pass:android \
-    --out out/dashcam.apk out/aligned.apk
 
-echo "built: $(pwd)/out/dashcam.apk"
-echo "source bundle inside: assets/dashcam-source.zip ($(unzip -l out/dashcam.apk | grep -c 'dashcam-source') entry)"
+"$BT/apksigner" sign --ks signing/debug.jks --ks-pass pass:android --key-pass pass:android \
+    --out "$APK" "$OUT/aligned.apk"
+
+echo "built: $(pwd)/$APK"
+echo "source bundle inside: assets/drive-source.zip ($(unzip -l "$APK" | grep -c 'drive-source') entry)"

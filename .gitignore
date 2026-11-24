@@ -6,3 +6,6 @@
 
 # APKs pulled from the device for reference
 /_apk/
+
+# 真机测试产物（test/lib.sh 默认输出目录）
+/test/artifacts/
