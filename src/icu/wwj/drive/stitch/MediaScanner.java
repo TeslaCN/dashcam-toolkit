@@ -79,7 +79,10 @@ public class MediaScanner {
                 boolean hasMain = g.views.containsKey("MAIN") || g.views.containsKey("FRONT");
                 if (g.size() >= 2 && hasMain) r.groups.add(g);
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            // 权限/Provider 异常不再静默：至少让 logcat 能看到原因
+            android.util.Log.w("StitchTest", "SCAN failed legacy="
+                    + android.os.Environment.isExternalStorageLegacy(), e);
         } finally {
             if (c != null) c.close();
         }

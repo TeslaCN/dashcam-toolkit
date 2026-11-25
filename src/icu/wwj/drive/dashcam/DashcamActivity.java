@@ -1014,9 +1014,11 @@ public class DashcamActivity extends Activity {
         List<String> perms = new ArrayList<>();
         perms.add(Manifest.permission.CAMERA);
         perms.add(Manifest.permission.ACCESS_FINE_LOCATION);
-        // Android 10 and below: write access to the public Movies/Dashcam folder so that
-        // recordings show up in the system gallery.
-        if (Build.VERSION.SDK_INT <= 29) {
+        // API 29–32：targetSdk 29 + requestLegacyExternalStorage 仍走 legacy 存储，
+        // 申请读写权限才能把录像写进公共 Movies/Dashcam（系统相册可见）。
+        // API 33+：WRITE_EXTERNAL_STORAGE 已失效，不再申请；录像会落到 App 私有目录，
+        // 通过应用内的「录像文件」查看/分享。
+        if (Build.VERSION.SDK_INT <= 32) {
             perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
             perms.add(Manifest.permission.READ_EXTERNAL_STORAGE);
         }
@@ -1027,6 +1029,9 @@ public class DashcamActivity extends Activity {
             requestPermissions(missing.toArray(new String[0]), REQ_PERMS);
         } else if (StorageManager.publicDir() != null) {
             new Thread(() -> StorageManager.migrateLegacy(this), "migrate").start();
+        } else if (Build.VERSION.SDK_INT >= 33) {
+            Toast.makeText(this, "Android 13+ 不再支持直接写系统相册目录：录像保存在 App 私有目录，"
+                    + "可在「录像文件」里播放/分享", Toast.LENGTH_LONG).show();
         }
     }
 

@@ -9,8 +9,8 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="icu.wwj.drive"
-    android:versionCode="1"
-    android:versionName="1.0.0">
+    android:versionCode="2"
+    android:versionName="1.0.1">
 
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="29" />
 
@@ -24,9 +24,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- legacy 外部存储：记录仪写 Movies/Dashcam，拼接读相册、写 Movies/DashcamStitch -->
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <!--
+      存储权限：别用 maxSdkVersion=29 —— 那会让 Android 11+ 直接「没声明」这些权限，
+      运行时申请被系统静默拒绝（拼接读不到相册就是这么来的）。
+      本应用 targetSdk=29，所以 Android 13/14 上系统仍走 READ_EXTERNAL_STORAGE 的兼容路径
+      （READ_MEDIA_VIDEO 只在 targetSdk 33+ 才生效，暂时不申请，见 docs/ARCHITECTURE.md）。
+      WRITE 只需要到 32：33+ 起写相册目录走 MediaStore，不再需要该权限。
+    -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />

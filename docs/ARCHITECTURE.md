@@ -134,9 +134,46 @@ TOOLS.add(new Tool(
 
 - 清单顶部统一声明（`CAMERA`、定位、存储、前台服务、唤醒锁……）。
 - 功能在进入自己的界面时按需 `requestPermissions`，不要一进首页就弹一堆权限。
-- 记录仪：`CAMERA` 必需，`ACCESS_FINE_LOCATION` 只影响 GPS 水印（可拒绝），`WRITE_EXTERNAL_STORAGE` 决定录像落公共目录还是私有目录。
-- 拼接：`READ_EXTERNAL_STORAGE` 读相册素材，`WRITE_EXTERNAL_STORAGE` 写 `Movies/DashcamStitch`。
+- 记录仪：`CAMERA` 必需，`ACCESS_FINE_LOCATION` 只影响 GPS 水印（可拒绝），`WRITE_EXTERNAL_STORAGE`
+  （`maxSdkVersion=32`）决定录像落公共目录还是私有目录。
+- 拼接：`READ_EXTERNAL_STORAGE` 读相册素材，`WRITE_EXTERNAL_STORAGE` 只在 API ≤32 需要（33+ 走 MediaStore）。
 - 电池优化白名单（`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`）由记录仪设置页引导，属于记录仪功能。
+
+### 5.1 存储权限的版本矩阵（踩过的坑）
+
+**别给存储权限加 `maxSdkVersion=29`。** 加了之后 Android 11+ 上这两条权限等于没声明：
+系统不会弹授权框，`adb shell pm grant` 直接报「has not requested permission」，
+`checkSelfPermission` 永远是 DENIED —— 拼接就会一直提示「没有相册权限」。
+
+当前策略（targetSdk 29）：
+
+| 版本 | 读取相册 | 写公共目录 |
+|---|---|---|
+| API 29–32 | `READ_EXTERNAL_STORAGE` | `WRITE_EXTERNAL_STORAGE`（清单里 `maxSdkVersion=32`） |
+| API 33–36 | 仍申请 `READ_EXTERNAL_STORAGE`：系统会给 targetSdk ≤32 的应用自动补上 `READ_MEDIA_IMAGES/VIDEO/AUDIO`，用户在弹窗里点允许后二者一起授予 | 不再允许，记录仪回退到应用私有目录 |
+
+实测结论（Android 11 / 14 / 16 模拟器）：
+
+- 只申请并授予 `READ_MEDIA_VIDEO`（targetSdk 29）时，MediaStore 查询返回 0 行，**不能**替代
+  `READ_EXTERNAL_STORAGE`；
+- 申请 `READ_EXTERNAL_STORAGE` 并由用户点允许后，查询正常返回全部视频。
+
+以后把 `targetSdk` 提到 33+ 时要同步做三件事：
+1. 清单加 `READ_MEDIA_VIDEO`（34+ 再加 `READ_MEDIA_VISUAL_USER_SELECTED`），
+   `READ_EXTERNAL_STORAGE` 加 `maxSdkVersion=32`；
+2. `StitchHomeActivity.readPermissions()/hasPermission()` 按 SDK 分支；
+3. 记录仪改走 MediaStore 写入（`IS_PENDING` + `openFileDescriptor`），否则 Android 13+ 只能落私有目录。
+
+### 5.2 MediaStore 里看不到新文件？
+
+调试时用 `adb push` 塞进 `/sdcard/Movies/...` 的视频，`MEDIA_SCANNER_SCAN_FILE` 扫描出来的行
+可能带 `IS_PENDING=1`（shell 触发的扫描会这样），MediaProvider 对非属主应用**隐藏 pending 行**，
+表现就是「权限给了、文件也在，但扫描到 0 个视频」。把行改成已发布即可：
+
+```bash
+adb shell content update --uri content://media/external/file/<id> --bind is_pending:i:0
+```
+
 
 ---
 

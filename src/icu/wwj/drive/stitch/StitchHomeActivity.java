@@ -7,9 +7,11 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.AdapterView;
@@ -38,6 +40,8 @@ public class StitchHomeActivity extends Activity {
     private boolean mLoading;
     // 自动化测试入口：am start ... --ez autostart true --ei duration 30 --ei size 45
     private boolean mAutoStart;
+    // 权限被拒后去系统设置里改过：回到前台时如果已授权就自动重扫
+    private boolean mWaitPermission;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,10 +71,18 @@ public class StitchHomeActivity extends Activity {
         cleanupOrphans();
         mAutoStart = getIntent().getBooleanExtra("autostart", false);
         if (!hasPermission()) {
-            requestPermissions(new String[]{
-                    Manifest.permission.READ_EXTERNAL_STORAGE,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_PERM);
+            requestPermissions(readPermissions(), REQ_PERM);
         } else {
+            load();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 用户去系统设置里授权后回来：不用手动点刷新
+        if (mWaitPermission && hasPermission()) {
+            mWaitPermission = false;
             load();
         }
     }
@@ -145,20 +157,71 @@ public class StitchHomeActivity extends Activity {
         if (mThumbs != null) mThumbs.shutdown();
     }
 
+    /**
+     * 相册读取权限。
+     *
+     * <p>本应用 targetSdk 仍是 29：Android 13+ 对 targetSdk ≤ 32 的应用继续走
+     * READ_EXTERNAL_STORAGE 的兼容路径（此时 READ_MEDIA_VIDEO 不会被 MediaProvider 采纳），
+     * 所以从 Android 10 到 14 统一申请 READ_EXTERNAL_STORAGE。
+     *
+     * <p>将来把 targetSdk 提到 33+ 时，这里换成 READ_MEDIA_VIDEO（34+ 再加
+     * READ_MEDIA_VISUAL_USER_SELECTED），并同步改 {@link #hasPermission()}。
+     */
+    private static String[] readPermissions() {
+        return new String[]{Manifest.permission.READ_EXTERNAL_STORAGE};
+    }
+
+    /** 有相册读取授权即可扫描。 */
     private boolean hasPermission() {
-        return checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
-                == PackageManager.PERMISSION_GRANTED;
+        return isGranted(Manifest.permission.READ_EXTERNAL_STORAGE);
+    }
+
+    private boolean isGranted(String permission) {
+        return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
     }
 
     @Override
     public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
         if (req == REQ_PERM) {
-            if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) {
+            if (hasPermission()) {
                 load();
             } else {
-                mStatus.setText("需要读取相册权限才能找到素材");
+                mWaitPermission = true;
+                showPermissionDenied();
             }
         }
+    }
+
+    /**
+     * 权限被拒（尤其是“拒绝且不再询问”后系统不再弹窗）时给出明确出口：
+     * 去系统设置里授权，回到前台自动重扫。
+     */
+    private void showPermissionDenied() {
+        mStatus.setVisibility(View.VISIBLE);
+        mStatus.setText("没有相册读取权限，扫描不到视频素材。\n请允许「视频/存储」权限后点刷新，或点下面的「去设置」。");
+        new AlertDialog.Builder(this)
+                .setTitle("需要相册权限")
+                .setMessage("多视角素材来自系统相册里的视频。\n请在系统设置里允许本应用读取视频/存储。")
+                .setPositiveButton("去设置", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        try {
+                            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.parse("package:" + getPackageName()));
+                            startActivity(i);
+                        } catch (Exception ignored) {
+                            // 个别 ROM 没有这个设置页，退回手动刷新
+                        }
+                    }
+                })
+                .setNegativeButton("重试", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        if (hasPermission()) load();
+                        else requestPermissions(readPermissions(), REQ_PERM);
+                    }
+                })
+                .show();
     }
 
     private void load() {

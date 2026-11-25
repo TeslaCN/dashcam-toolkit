@@ -149,14 +149,19 @@ unzip -p out/drive.apk assets/drive-source.zip > /tmp/drive-src.zip
 mkdir -p /tmp/drive && cd /tmp/drive && unzip -q /tmp/drive-src.zip && ./build.sh
 ```
 
-安装与授权（API 29 需要运行时权限）：
+安装与授权（运行时权限必须授予，否则拼接扫不到相册、记录仪写着写着会落私有目录）：
 
 ```bash
 adb install -r out/drive.apk
 adb shell pm grant icu.wwj.drive android.permission.CAMERA
 adb shell pm grant icu.wwj.drive android.permission.ACCESS_FINE_LOCATION
-adb shell pm grant icu.wwj.drive android.permission.WRITE_EXTERNAL_STORAGE   # API 29 legacy 存储
+adb shell pm grant icu.wwj.drive android.permission.READ_EXTERNAL_STORAGE    # 相册读取（拼接）
+adb shell pm grant icu.wwj.drive android.permission.WRITE_EXTERNAL_STORAGE   # 仅 API ≤32 生效
 ```
+
+> 部分 ROM（例如 Android 16 上的 ColorOS）禁止 `adb shell pm grant` 授予运行时权限，
+> 会报 `Neither user 2000 nor current process has GRANT_RUNTIME_PERMISSIONS`；
+> 这种情况在应用内点弹窗的「允许」即可，或到系统设置里授权。
 
 自动化接口：
 
@@ -176,7 +181,22 @@ adb shell am start-foreground-service -n icu.wwj.drive/.dashcam.RecordService \
 adb shell am start -n icu.wwj.drive/.stitch.StitchHomeActivity --ez autostart true --ei duration 105 --ei sizeMB 70
 ```
 
-### 5.1 真机回归脚本
+### 5.1 权限（Android 10 – 16）
+
+存储/相册权限按 targetSdk 29 的兼容路径处理，**不要**在清单里给这些权限加 `maxSdkVersion=29`
+（加了之后 Android 11+ 等于没声明，运行时申请会被系统静默拒绝——v1.0.0 的拼接读不到相册就是这个问题）：
+
+| 权限 | 声明 | 用途 |
+|---|---|---|
+| `READ_EXTERNAL_STORAGE` | 全版本声明 | 拼接读相册里的视频素材；Android 13+ 系统会据此自动补上 `READ_MEDIA_IMAGES/VIDEO/AUDIO`，弹窗授权后与 `READ_EXTERNAL_STORAGE` 一并授予 |
+| `WRITE_EXTERNAL_STORAGE` | `maxSdkVersion=32` | 记录仪写公共 `Movies/Dashcam`（legacy 存储）；33+ 不需要 |
+| `CAMERA` / `ACCESS_FINE_LOCATION` | 全版本 | 记录仪；定位只影响 GPS 水印，可拒绝 |
+
+行为：首次进拼接页会弹系统授权框；拒绝后应用内会给出「去设置 / 重试」，从设置返回时自动重扫。
+Android 13+ 上 `READ_MEDIA_VIDEO` 单独授予对 targetSdk 29 的应用**无效**，所以统一申请
+`READ_EXTERNAL_STORAGE`；以后把 targetSdk 提到 33+ 时再切到 `READ_MEDIA_VIDEO`（见 `docs/ARCHITECTURE.md`）。
+
+### 5.2 真机回归脚本
 
 `test/` 下是拼接功能的真机自动化套件（由 DashcamStitch 1.0 的测试脚本迁移）：
 
@@ -231,6 +251,8 @@ adb shell am start -n icu.wwj.drive/.stitch.StitchHomeActivity --ez autostart tr
 
 ## 8. 已知限制
 
+- **Android 13+ 的记录仪落盘**：`WRITE_EXTERNAL_STORAGE` 从 API 33 起失效，`Movies/Dashcam` 不可直接写，
+  录像会回退到应用私有目录（应用内「录像文件」照常播放/分享，但系统相册看不到）。要进相册需要改用 MediaStore 写入，属后续适配。
 - **minSdk 29**：拼接依赖 MediaStore `RELATIVE_PATH`（API 29）。记录仪本身原支持 Android 8.0+，如果哪天不要拼接，可把 minSdk 降回 26。
 - **targetSdk 29**：沿用旧工程，仍用 `requestLegacyExternalStorage`。要上 Android 11+ 得改前台服务类型（`foregroundServiceType="camera"`）和分区存储适配。
 - **拼接**需要 arm64 + 硬件 HEVC 编解码；1:45 素材约 75–90 秒出片；理想画布 3840×2696 受编码器高度上限（2160）限制会自动缩到 3076×2160。
@@ -243,7 +265,9 @@ adb shell am start -n icu.wwj.drive/.stitch.StitchHomeActivity --ez autostart tr
 
 ## 9. 版本
 
-`versionCode 1 / versionName 1.0.0` —— 记录仪 v2.23 + 拼接 v1.0 的首次整合。
+- `1.0.0`（versionCode 1）—— 记录仪 v2.23 + 拼接 v1.0 的首次整合。
+- `1.0.1`（versionCode 2）—— 修复存储权限声明：去掉 `maxSdkVersion=29`，Android 11–16 上相册/存储权限
+  现在能正常申请、授权、读取；拼接页补「去设置 / 重试 / 返回自动重扫」。
 
 ---
 
@@ -262,6 +286,7 @@ adb shell am start -n icu.wwj.drive/.stitch.StitchHomeActivity --ez autostart tr
 | 记录仪 | `action.START` 起前台服务（channel `icu.wwj.drive.dashcam.recording`）→ 产出 17.8 MB 分段（编码 5.8s）→ `action.STOP` 正常停止；回看页可见录像 |
 | 崩溃 | logcat `FATAL EXCEPTION` / `E AndroidRuntime` 均为 0 |
 | 旧包 | `com.dashcam.app` / `.probe` / `.stitch` 保持原样，未卸载未改动 |
+| 相册权限修复（v1.0.1） | Android 11 / 14 / 16 三个模拟器 + Android 16 真机复验：权限弹窗正常出现，授权后拼接扫到素材并成组；Android 11 上还验证了「拒绝 → 去设置 → 返回自动重扫」 |
 
 > 设备的旧 App 与新 App 可以并存；确认新包没问题后，旧包可直接 `adb uninstall`。
 
