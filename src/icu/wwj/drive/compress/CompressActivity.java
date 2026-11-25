@@ -6,9 +6,9 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.util.Log;
 import android.view.View;
-import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -33,6 +33,7 @@ public class CompressActivity extends Activity {
     private Button mShare;
 
     private final Handler mMain = new Handler(Looper.getMainLooper());
+    private PowerManager.WakeLock mWake;
     private final AtomicBoolean mCancel = new AtomicBoolean(false);
     private volatile boolean mFinished;
     private volatile CompressResult mResult;
@@ -44,7 +45,9 @@ public class CompressActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.compress_progress);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // 不强制屏幕常亮（OLED 烧屏风险）：屏幕可以自动熄灭/锁屏，
+        // 转码靠 CPU 的 partial wakelock 继续跑，完成后再释放。
+        acquireWakeLock();
 
         mTitle = (TextView) findViewById(R.id.txtTitle);
         mStatus = (TextView) findViewById(R.id.txtStatus);
@@ -148,6 +151,24 @@ public class CompressActivity extends Activity {
         }, "compress-worker").start();
     }
 
+    private void acquireWakeLock() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null) return;
+            mWake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "icu.wwj.drive:compress");
+            mWake.setReferenceCounted(false);
+            mWake.acquire(2 * 60 * 60 * 1000L);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void releaseWakeLock() {
+        try {
+            if (mWake != null && mWake.isHeld()) mWake.release();
+        } catch (Exception ignored) {
+        }
+    }
+
     private void cancelAndFinish() {
         mCancel.set(true);
         mStatus.setText("正在取消…");
@@ -160,6 +181,7 @@ public class CompressActivity extends Activity {
     }
 
     private void showDone(final CompressResult r) {
+        releaseWakeLock();
         mProgress.setProgress(100);
         mTitle.setText(R.string.compress_done);
         long sec = Math.max(1, (System.currentTimeMillis() - mStartMs) / 1000);
@@ -190,6 +212,7 @@ public class CompressActivity extends Activity {
     }
 
     private void fail(String msg) {
+        releaseWakeLock();
         mProgress.setVisibility(View.GONE);
         mTitle.setText("压缩失败");
         mStatus.setText(msg);
@@ -228,6 +251,7 @@ public class CompressActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        releaseWakeLock();
         if (!mFinished) {
             mCancel.set(true);
         }

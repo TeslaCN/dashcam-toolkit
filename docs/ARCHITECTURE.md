@@ -202,6 +202,9 @@ MediaExtractor(音频轨) ── 原样 copy AAC 样本 ──┘（按 PTS 与�
   硬件编码器不支持两遍；体积靠"编完量一次，超了就按实际/目标比例调低码率重试（≤2 次）"保证。
 - **兼容性**：硬件编码器默认无 B 帧，MediaMuxer 不写 `elst`；输出 `has_b_frames=0`、
   首包 DTS=0，正好避开电脑端遇到的「B 帧→负 DTS→edit list→手机卡顿」问题。
+- **屏幕/功耗**：进度页不申请 `FLAG_KEEP_SCREEN_ON`（OLED 长亮会烧屏），屏幕可以熄灭/锁屏；
+  转码线程在 CPU partial wakelock（2 小时上限，完成/销毁时释放）下继续跑。拼接页同样处理，
+  记录仪的 `KEEP_SCREEN_ON` 只在用户打开实时预览时按需启用。
 
 ### 6.3 元数据能力边界
 
@@ -241,7 +244,7 @@ adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
 |---|---|---|
 | 记录仪 | 相机回调线程 + GL 线程 + 编码器线程；UI 通过 `Status` 轮询/Binder 拿状态 | 前台服务 `START_STICKY` + WakeLock，息屏继续；`WatchdogReceiver` 定时拉起；杀进程后下次启动清理未完成的段 |
 | 拼接 | 单后台线程做 4 路解码 + GL 合成 + 编码；UI 只收进度回调 | 没有前台服务，切后台通常能继续；进程被杀留下 pending 行，下次冷启动清理 |
-| 压缩 | 单后台线程：解码+编码+写 muxer；UI 只收进度 | 没有前台服务，Activity 在前台时跑；取消/失败删 pending，进程被杀留下的 pending 行由 MediaStore 自行回收 |
+| 压缩 | 单后台线程：解码+编码+写 muxer；UI 只收进度 | 没有前台服务；屏幕可熄灭/锁屏，靠 partial wakelock 继续；取消/失败删 pending，进程被杀后由冷启动清理（pending URI + 孤儿文件） |
 
 新功能如果要做**长时间后台任务**，请像记录仪一样用前台服务 + 通知，不要指望普通 Activity 存活。
 

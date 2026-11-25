@@ -10,6 +10,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
+import android.os.PowerManager;
 import android.provider.MediaStore;
 import android.view.View;
 import android.widget.Button;
@@ -36,12 +37,14 @@ public class StitchActivity extends Activity {
     private Uri mOutputUri;
     private boolean mFinished;
     private long mStartMs;
+    private PowerManager.WakeLock mWake;
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         setContentView(R.layout.stitch_progress);
-        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // 同压缩页：不强制屏幕常亮，屏幕可熄灭，合成靠 CPU partial wakelock 继续
+        acquireWakeLock();
         mProgress = (ProgressBar) findViewById(R.id.progress);
         mStatus = (TextView) findViewById(R.id.txtStatus);
         mTitle = (TextView) findViewById(R.id.txtTitle);
@@ -240,9 +243,28 @@ public class StitchActivity extends Activity {
         super.onBackPressed();
     }
 
+    private void acquireWakeLock() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null) return;
+            mWake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "icu.wwj.drive:stitch");
+            mWake.setReferenceCounted(false);
+            mWake.acquire(2 * 60 * 60 * 1000L);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void releaseWakeLock() {
+        try {
+            if (mWake != null && mWake.isHeld()) mWake.release();
+        } catch (Exception ignored) {
+        }
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        releaseWakeLock();
         if (mComposer != null && !mFinished) mComposer.cancel();
     }
 }
