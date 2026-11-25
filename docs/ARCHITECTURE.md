@@ -16,14 +16,15 @@
 │  DriveApp       Application，跨功能初始化     │
 └───────────────┬─────────────────────────────┘
                 │ 只有 startActivity 这一种耦合
-    ┌───────────┴────────────┐
-    ▼                        ▼
-┌──────────────────┐  ┌──────────────────┐
-│ dashcam 功能包    │  │ stitch 功能包     │
-│ Activity/Service │  │ Activity/Composer│
-│ 自己的 res/存储   │  │ 自己的 res/存储   │
-└──────────────────┘  └──────────────────┘
-    └──── 跨功能只通过公共目录 + MediaStore ────┘
+    ┌───────────┼────────────┐
+    ▼           ▼            ▼
+┌───────────┐ ┌───────────┐ ┌──────────────┐
+│ dashcam   │ │ stitch    │ │ compress     │
+│ Activity/ │ │ Activity/ │ │ Activity/    │
+│ Service   │ │ Composer  │ │ Compressor   │
+│ res/存储  │ │ res/存储  │ │ res/存储     │
+└───────────┘ └───────────┘ └──────────────┘
+    └─── 跨功能只通过公共目录 + MediaStore ───┘
 ```
 
 三条硬规则：
@@ -177,18 +178,76 @@ adb shell content update --uri content://media/external/file/<id> --bind is_pend
 
 ---
 
-## 6. 线程与生命周期（现有两个功能）
+## 6. 视频压缩引擎（compress）
+
+### 6.1 为什么不用 ffmpeg
+
+电脑端用 ffmpeg 是两遍 ABR + x265 参数调整；手机上塞 ffmpeg 要带 20–40MB 的 so，还要处理
+NEON/ABI/许可，和"一个 240KB 的 APK"的工程目标冲突。Android 自带 MediaCodec 能硬解硬编，
+零拷贝管线足够，代价是只能单遍、参数可调范围小。
+
+### 6.2 管线
+
+```
+MediaExtractor(视频轨) → MediaCodec 解码器 → [输出 Surface = 编码器 createInputSurface()]
+                                               → MediaCodec 编码器（同 MIME / 同宽高 / 同帧率）
+                                               → MediaMuxer（直接写 MediaStore pending 的 PFD）
+MediaExtractor(音频轨) ── 原样 copy AAC 样本 ──┘（按 PTS 与视频交错写）
+```
+
+- **零拷贝**：解码器 `releaseOutputBuffer(idx, true)` 直接渲染到编码器 InputSurface，没有 YUV 往返。
+- **时间戳透传**：解码输出的 PTS 原样给编码器；只把首个 PTS 平移到 0，保证首包 DTS≥0。
+  帧数/帧率/VFR 因此都保持。
+- **码率**：单遍 VBR（`KEY_BITRATE_MODE` + `KEY_VIDEO_BITRATE`），I 帧间隔 1 秒。
+  硬件编码器不支持两遍；体积靠"编完量一次，超了就按实际/目标比例调低码率重试（≤2 次）"保证。
+- **兼容性**：硬件编码器默认无 B 帧，MediaMuxer 不写 `elst`；输出 `has_b_frames=0`、
+  首包 DTS=0，正好避开电脑端遇到的「B 帧→负 DTS→edit list→手机卡顿」问题。
+
+### 6.3 元数据能力边界
+
+| 元数据 | 手机端能否保留 | 做法 |
+|---|---|---|
+| 旋转 | ✅ | `MediaMuxer.setOrientationHint(rotation)` |
+| 拍摄位置 | ✅ | 解析 `METADATA_KEY_LOCATION` 后 `setLocation` |
+| 色彩（primaries/transfer/range） | ✅ | 写进编码器 MediaFormat，MediaMuxer 落到 `colr`/`pasp` |
+| 相册日期 | ✅（近似） | 输出行写源 `DATE_TAKEN` |
+| creation_time | ❌ | MediaMuxer 没有写 `mvhd/creation_time` 的 API，会变成压缩时间 |
+| profile/level | 部分 | 由硬件编码器决定，可能从 Main10/Main 降级；不允许升高 |
+| 音轨编码 | 仅 AAC 直通 | 其它编码明确报错，不静默丢 |
+
+### 6.4 测试与回归
+
+压缩的进程被杀残留采用"记 URI + 冷启动核对"：
+转码前把 MediaStore pending item URI 写进 `SharedPreferences`，`DriveApp.onCreate` 后台调用
+`Compressor.cleanupStale()` 按 URI 精确删除，再按 `_compressed(...).mp4` 命名兜底删孤儿文件，
+最后对 `Movies/Compressed` 触发一次 MediaScanner 扫描（修剪"行在文件没了"的旧记录）。
+已发布（`IS_PENDING=0`）的输出不会被清理。列表侧过滤掉文件名含 `_compressed` 的产物。
+
+`test/` 下的脚本目前只覆盖拼接；压缩用 Activity 的自动化入口驱动：
+
+```bash
+adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
+  --ez autostart true --es name <关键字> --ei targetMB 40
+```
+
+验收看 `ffprobe`：分辨率/编码/帧率/帧数/时长/体积、`has_b_frames=0`、首包 `dts_time>=0`、
+无 `elst`、音轨编码与声道、旋转、色彩；再 `ffmpeg -xerror` 全片解码。日志 TAG 为 `CompressTest`。
+
+---
+
+## 7. 线程与生命周期（现有三个功能）
 
 | 功能 | 线程模型 | 生命周期要点 |
 |---|---|---|
 | 记录仪 | 相机回调线程 + GL 线程 + 编码器线程；UI 通过 `Status` 轮询/Binder 拿状态 | 前台服务 `START_STICKY` + WakeLock，息屏继续；`WatchdogReceiver` 定时拉起；杀进程后下次启动清理未完成的段 |
 | 拼接 | 单后台线程做 4 路解码 + GL 合成 + 编码；UI 只收进度回调 | 没有前台服务，切后台通常能继续；进程被杀留下 pending 行，下次冷启动清理 |
+| 压缩 | 单后台线程：解码+编码+写 muxer；UI 只收进度 | 没有前台服务，Activity 在前台时跑；取消/失败删 pending，进程被杀留下的 pending 行由 MediaStore 自行回收 |
 
 新功能如果要做**长时间后台任务**，请像记录仪一样用前台服务 + 通知，不要指望普通 Activity 存活。
 
 ---
 
-## 7. 自动化与测试入口约定
+## 8. 自动化与测试入口约定
 
 给脚本留的入口保持稳定，方便真机回归：
 
@@ -209,7 +268,7 @@ adb shell am start -n icu.wwj.drive/.stitch.StitchHomeActivity \
 
 ---
 
-## 8. 版本与包名演进
+## 9. 版本与包名演进
 
 - **applicationId 一旦对外发布就不再改**（Play/系统都认它，改了 = 新应用、设置全丢）。
 - 新增功能改 `versionCode/versionName`（清单里），不改包名。
@@ -217,10 +276,11 @@ adb shell am start -n icu.wwj.drive/.stitch.StitchHomeActivity \
 
 ---
 
-## 9. 待办 / 想法
+## 10. 待办 / 想法
 
 - `icu.wwj.drive.common`：等第三个功能出现、真的有两处以上重复时再抽，避免过早抽象。
 - 记录仪事件触发（加速度/蓝牙遥控）——旧工程 v2.17 起暂停入口，等硬件。
 - 拼接更多模板（2×2、画中画）：`gl/CanvasRenderer.draw()` 里加坐标即可。
 - 拼接音轨支持：`Composer` 里多开一条 `MediaMuxer` track，时间戳沿用 `TimeBase` 的思路。
+- 压缩引擎可考虑加"后台服务 + 通知"，支持息屏压长视频；目前依赖 Activity 存活。
 - 首页显示记录仪"正在录像"状态（读 `dashcam_runtime` 或绑定服务），目前刻意保持零依赖。

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 视频压缩工具图标：片框 + 向下收拢的箭头 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path android:fillColor="#263238" android:pathData="M0,0h48v48h-48z" />
+    <path android:fillColor="#ECEFF1" android:pathData="M9,8h30v32h-30z M13,12v24h22v-24z" />
+    <path android:fillColor="#43A047"
+        android:pathData="M24,14 L33,25 L28,25 L28,32 L20,32 L20,25 L15,25 Z" />
+</vector>

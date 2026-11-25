@@ -9,8 +9,8 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="icu.wwj.drive"
-    android:versionCode="2"
-    android:versionName="1.0.1">
+    android:versionCode="3"
+    android:versionName="1.1.0">
 
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="29" />
 
@@ -103,6 +103,21 @@
             android:name=".stitch.StitchActivity"
             android:exported="false"
             android:label="@string/tool_stitch_title"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:screenOrientation="portrait" />
+
+        <!-- ================= 视频压缩：icu.wwj.drive.compress ================= -->
+        <activity
+            android:name=".compress.CompressHomeActivity"
+            android:exported="true"
+            android:label="@string/tool_compress_title"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".compress.CompressActivity"
+            android:exported="false"
+            android:label="@string/tool_compress_title"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:screenOrientation="portrait" />
     </application>

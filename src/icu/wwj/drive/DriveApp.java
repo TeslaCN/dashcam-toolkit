@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.os.Build;
 
+import icu.wwj.drive.compress.Compressor;
 import icu.wwj.drive.dashcam.StorageManager;
 
 /**
@@ -30,6 +31,18 @@ public class DriveApp extends Application {
 
         // 记录仪：前台服务通知渠道
         ensureDashcamChannel();
+
+        // 压缩：清理上次进程被杀残留的 pending 行/半成品（后台，别拖慢启动）
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Compressor.cleanupStale(DriveApp.this);
+                } catch (Throwable t) {
+                    android.util.Log.w("DriveApp", "compress cleanup failed", t);
+                }
+            }
+        }, "compress-cleanup").start();
     }
 
     private void ensureDashcamChannel() {

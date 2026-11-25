@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
+import icu.wwj.drive.compress.CompressHomeActivity;
 import icu.wwj.drive.dashcam.DashcamActivity;
 import icu.wwj.drive.stitch.StitchHomeActivity;
 
@@ -43,6 +44,14 @@ public final class ToolRegistry {
                 R.drawable.ic_stitch,
                 StitchHomeActivity.class,
                 20));
+
+        TOOLS.add(new Tool(
+                "compress",
+                R.string.tool_compress_title,
+                R.string.tool_compress_desc,
+                R.drawable.ic_compress,
+                CompressHomeActivity.class,
+                30));
     }
 
     /** 按 order 排好序的只读副本。 */

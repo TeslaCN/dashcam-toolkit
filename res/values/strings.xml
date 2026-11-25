@@ -3,7 +3,7 @@
     <!-- ================= 应用 ================= -->
     <string name="app_name">行车工具</string>
     <string name="home_title">行车工具</string>
-    <string name="home_subtitle">记录仪 · 多视角拼接 · 更多车载功能</string>
+    <string name="home_subtitle">记录仪 · 多视角拼接 · 视频压缩 · 更多车载功能</string>
     <string name="home_hint">新功能按 icu.wwj.drive.&lt;feature&gt; 接入</string>
     <string name="home_footer">icu.wwj.drive · v%1$s</string>
 
@@ -12,6 +12,8 @@
     <string name="tool_dashcam_desc">循环录像 · 时间/GPS 水印 · 息屏值守</string>
     <string name="tool_stitch_title">四视角拼接</string>
     <string name="tool_stitch_desc">同一时刻四路素材合成一张画面，手机直接出片</string>
+    <string name="tool_compress_title">视频压缩</string>
+    <string name="tool_compress_desc">保持分辨率/帧率/编码，按目标体积压小</string>
 
     <!-- ================= 行车记录仪 ================= -->
     <string name="dashcam_channel_name">行车录制</string>
@@ -26,4 +28,22 @@
     <string name="stitch_play">播放</string>
     <string name="stitch_share">分享</string>
     <string name="stitch_back">返回</string>
+
+    <!-- ================= 视频压缩 ================= -->
+    <string name="compress_loading">正在扫描相册…</string>
+    <string name="compress_refresh">刷新</string>
+    <string name="compress_empty">没有找到视频</string>
+    <string name="compress_start">开始压缩</string>
+    <string name="compress_cancel">取消</string>
+    <string name="compress_done">压缩完成</string>
+    <string name="compress_play">播放</string>
+    <string name="compress_share">分享</string>
+    <string name="compress_back">完成</string>
+    <string name="compress_prepare">正在分析视频…</string>
+    <string name="compress_compress_title">压缩中</string>
+    <string name="compress_keep_note">保持分辨率、帧率、编码与音轨，只降码率；输出到相册 Movies/Compressed/</string>
+    <string name="compress_ratio50">压到原片 50%</string>
+    <string name="compress_ratio30">压到原片 30%</string>
+    <string name="compress_custom">自定义大小（MB）</string>
+    <string name="compress_custom_hint">例如 40</string>
 </resources>

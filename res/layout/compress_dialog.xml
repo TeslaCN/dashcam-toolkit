@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/compress_keep_note"
+        android:textColor="?android:attr/textColorSecondary"
+        android:textSize="13sp" />
+
+    <RadioGroup
+        android:id="@+id/rgMode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:orientation="vertical">
+
+        <RadioButton
+            android:id="@+id/rb50"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:checked="true"
+            android:text="@string/compress_ratio50" />
+
+        <RadioButton
+            android:id="@+id/rb30"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/compress_ratio30" />
+
+        <RadioButton
+            android:id="@+id/rbCustom"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/compress_custom" />
+    </RadioGroup>
+
+    <EditText
+        android:id="@+id/etMB"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/compress_custom_hint"
+        android:inputType="number" />
+
+    <TextView
+        android:id="@+id/txtEstimate"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:textColor="#8AB4F8"
+        android:textSize="13sp" />
+</LinearLayout>

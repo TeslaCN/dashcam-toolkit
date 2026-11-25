@@ -1,7 +1,7 @@
 # WWJ 行车工具（icu.wwj.drive）
 
 把一个旧手机改成的**车载工具集**：只有一个 APK，打开是工具首页，每个工具是一个独立功能包。
-首批整合了两个从零自研、真机长跑验证过的工具：**行车记录仪** 和 **四视角拼接**。
+目前包含三个工具：**行车记录仪**、**四视角拼接**、**视频压缩**，都是真机验证过的。
 
 - 应用包名：`icu.wwj.drive`（个人域名 `wwj.icu` 倒写）
 - 功能包名：`icu.wwj.drive.<feature>`
@@ -15,8 +15,9 @@
 |---|---|---|
 | **行车记录仪** | `icu.wwj.drive.dashcam` | 循环录像（段间无空洞）、时间/GPS/速度水印烧录、HEVC 硬编、1080P/720P、息屏后台录制、存储配额 FIFO 覆盖、看门狗自愈、相册式回看 |
 | **四视角拼接** | `icu.wwj.drive.stitch` | 同一时刻 MAIN/LEFT/BACK/RIGHT 四路素材拼成一张画面，几何不裁剪不拉伸，按目标体积分配码率，末尾 15 秒提码率保车牌 |
+| **视频压缩** | `icu.wwj.drive.compress` | 保持分辨率/帧率/编码/音轨/旋转等元数据，按目标体积或比例降码率，输出到相册 |
 
-两个功能共享同一个 APK、同一个 `Application`（`icu.wwj.drive.DriveApp`），首页是工具列表。
+三个功能共享同一个 APK、同一个 `Application`（`icu.wwj.drive.DriveApp`），首页是工具列表。
 以后新增功能（胎压、油耗、停车监控、蓝牙遥控……）按第 6 节的方式挂进来，首页自动出现入口。
 
 ---
@@ -47,6 +48,8 @@
 | 录像 Provider | `icu.wwj.drive.dashcam.ClipProvider` |
 | 拼接列表 | `icu.wwj.drive.stitch.StitchHomeActivity` |
 | 拼接进度 | `icu.wwj.drive.stitch.StitchActivity` |
+| 压缩列表 | `icu.wwj.drive.compress.CompressHomeActivity` |
+| 压缩进度 | `icu.wwj.drive.compress.CompressActivity` |
 
 ---
 
@@ -56,8 +59,9 @@
 icu.wwj.drive.MainActivity（首页）
         │  只依赖 ToolRegistry，不认识任何具体功能
         ▼
-   ToolRegistry ──► Tool(dashcam) ──► dashcam.DashcamActivity ──► RecordService（前台服务）
-                └► Tool(stitch)  ──► stitch.StitchHomeActivity ──► stitch.StitchActivity ──► Composer（MediaCodec+GL）
+   ToolRegistry ──► Tool(dashcam)  ──► dashcam.DashcamActivity ──► RecordService（前台服务）
+                ├► Tool(stitch)   ──► stitch.StitchHomeActivity ──► stitch.StitchActivity ──► Composer（MediaCodec+GL）
+                └► Tool(compress) ──► compress.CompressHomeActivity ──► compress.CompressActivity ──► Compressor（MediaCodec 转码）
 
 icu.wwj.drive.DriveApp（Application）
    ├─ StorageManager.setContext()        记录仪 MediaStore 同步
@@ -125,6 +129,15 @@ src/icu/wwj/drive/
     ThumbCache.java           缩略图缓存
     gl/CanvasRenderer.java    四路纹理按模板绘制
     gl/EglCore.java           EGL14 封装
+  compress/                  视频压缩（8 个类）
+    CompressHomeActivity.java  视频列表 + 压缩参数（50%/30%/自定义 MB）
+    CompressActivity.java      进度 / 结果 / 播放 / 分享
+    Compressor.java            MediaCodec 转码引擎（解码 Surface → 编码 Surface）
+    MediaInfo.java             编码/分辨率/帧率/音轨/旋转/色彩探测
+    VideoEntry.java            列表条目
+    VideoListAdapter.java      列表适配器
+    CompressOptions.java       目标体积 / 比例参数
+    CompressResult.java        压缩结果
 ```
 
 ---
@@ -212,7 +225,75 @@ Android 13+ 上 `READ_MEDIA_VIDEO` 单独授予对 targetSdk 29 的应用**无�
 
 ---
 
-## 6. 新增一个功能（3 步）
+## 6. 视频压缩（v1.1.0 新增）
+
+把相册里的视频按目标体积压小，**保持分辨率、帧率、编码家族、音轨和旋转/色彩元数据**，只降码率。
+
+入口：首页 →「视频压缩」→ 选视频 → 选「原片 50% / 原片 30% / 自定义 MB」→ 开始。
+输出在相册 `Movies/Compressed/<原名>_compressed.mp4`（同名冲突时自动加 `_yyyyMMdd_HHmmss`）。
+
+### 6.1 手机端和电脑端 ffmpeg 的差别
+
+| 项 | 电脑（ffmpeg） | 手机（本项目） |
+|---|---|---|
+| 编码器 | x264/x265 软件编码 | MediaCodec 硬件编解码，解码输出 Surface 直连编码器 InputSurface（零拷贝） |
+| 两遍编码 | 支持，体积可预测 | 硬件编码器不支持两遍 → **单遍 VBR + 体积反馈重试**（最多 2 次） |
+| 音频 | `-c:a copy` | MediaExtractor 原样 copy AAC 样本 |
+| 码流兼容性 | 要手动关 B 帧、修 elst、打 hvc1 | 硬件编码器默认无 B 帧，MediaMuxer 不写 edit list → 天然规避「电脑流畅手机卡」的根因 |
+| 元数据 | `-movflags`、`-tag:v`、色彩标记手动打 | MediaMuxer 保留旋转/位置/色彩；**creation_time 无法保留**（相册里用 DATE_TAKEN 近似） |
+
+> 「电脑流畅、手机卡」的根因是 x264/x265 默认 B 帧 → 首包负 DTS → ffmpeg 写 edit list 偏移，
+> 部分手机播放器处理不了。手机端硬编码器一般只输出 P 帧，MediaMuxer 也不写 `elst`，
+> 所以这个坑在手机方案里天然不存在；这一点靠 ffprobe 校验 `has_b_frames=0`、首包 DTS≥0 来兜底。
+
+### 6.2 体积预算
+
+```text
+视频码率 = (目标字节 × 8 × 0.92) / 时长秒 − 音频码率
+bpp      = 视频码率 / (宽 × 高 × 帧率)
+```
+
+- 目标按**十进制 MB**（40MB = 40,000,000 字节）；0.92 是编码器超采样余量。
+- bpp < 0.012（H.264）/ < 0.008（HEVC）时画质会明显变软，应用照压但建议改用「原片 50%」。
+- 源片 bpp 本来就低于 0.05 时收益有限，可能只是再损失一次。
+
+### 6.3 能力与限制
+
+| 项 | 状态 |
+|---|---|
+| 保持分辨率 | ✅ 不缩放 |
+| 保持帧率/帧数 | ✅ 时间戳透传（VFR 也保持），帧数与源相差 ≤1 |
+| 保持编码家族 | ✅ HEVC→HEVC、H.264→H.264（profile 由硬件编码器决定） |
+| 音轨 | ✅ AAC 直通；其它编码明确报错（不静默丢音轨） |
+| 旋转 / 位置 / 色彩 | ✅ `setOrientationHint` / `setLocation` / 编码格式色彩字段 |
+| creation_time | ❌ MediaMuxer 不支持写入，相册用 DATE_TAKEN 近似 |
+| 10bit / HDR | ❌ 硬件编码器不支持，检测到直接报错，不做有损降位深 |
+| 速度 | 硬件编解码，4K 通常快于实时（视机型） |
+
+### 6.4 中断、取消与清理
+
+| 场景 | 行为 |
+|---|---|
+| 点「取消」 | 引擎轮询取消标志，走 finally 删除 pending 行与半成品，界面退出 |
+| 转码中进程被杀/系统回收 | 转码开始前会把输出 item URI 写进 SharedPreferences；**下次冷启动**时按该 URI 精确删除残留行+文件，再按命名规则兜底删孤儿文件，最后对 `Movies/Compressed` 做一次 MediaScanner 扫描修剪旧记录 |
+| 已发布输出（IS_PENDING=0） | 冷启动清理**不会**碰，正常成片始终保留 |
+| 列表 | 不显示本功能的产物（文件名包含 `_compressed` 的跳过），避免把压缩结果当素材再压 |
+
+### 6.5 自动化接口
+
+```bash
+# 按文件名关键字找视频，压到 40MB
+adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
+  --ez autostart true --es name DVR_MAIN --ei targetMB 40
+
+# 或压到原体积 30%
+adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
+  --ez autostart true --es name DVR_MAIN --ei ratioPct 30
+```
+
+---
+
+## 7. 新增一个功能（3 步）
 
 1. 建包 `icu.wwj.drive.<feature>`，写功能自己的 Activity/Service；组件用 `<feature>` 前缀命名
    （authority/action/通知渠道同理），资源加 `<feature>_` 前缀，产物写 `Movies/<Feature>`。
@@ -223,7 +304,7 @@ Android 13+ 上 `READ_MEDIA_VIDEO` 单独授予对 targetSdk 29 的应用**无�
 
 ---
 
-## 7. 与旧工程的关系
+## 8. 与旧工程的关系
 
 本项目是把两个独立 App 合并重命名的结果，业务代码基本原样搬运，只改包名/资源名/标识符：
 
@@ -249,8 +330,11 @@ Android 13+ 上 `READ_MEDIA_VIDEO` 单独授予对 targetSdk 29 的应用**无�
 
 ---
 
-## 8. 已知限制
+## 9. 已知限制
 
+- **视频压缩只支持 AAC 音轨直通**，AC-3/Opus 等会明确报错；10bit/HDR 直接拒绝。
+- **视频压缩的 creation_time 会变成压缩时间**（MediaMuxer 不支持写），其余可迁移元数据（旋转/位置/色彩/相册日期）都会保留。
+- **目标体积受硬件编码器码率下限约束**：目标极小时（bpp 低于约 0.008）重试两次后仍可能略超，界面会显示实际体积。
 - **Android 13+ 的记录仪落盘**：`WRITE_EXTERNAL_STORAGE` 从 API 33 起失效，`Movies/Dashcam` 不可直接写，
   录像会回退到应用私有目录（应用内「录像文件」照常播放/分享，但系统相册看不到）。要进相册需要改用 MediaStore 写入，属后续适配。
 - **minSdk 29**：拼接依赖 MediaStore `RELATIVE_PATH`（API 29）。记录仪本身原支持 Android 8.0+，如果哪天不要拼接，可把 minSdk 降回 26。
@@ -263,15 +347,17 @@ Android 13+ 上 `READ_MEDIA_VIDEO` 单独授予对 targetSdk 29 的应用**无�
 
 ---
 
-## 9. 版本
+## 10. 版本
 
 - `1.0.0`（versionCode 1）—— 记录仪 v2.23 + 拼接 v1.0 的首次整合。
 - `1.0.1`（versionCode 2）—— 修复存储权限声明：去掉 `maxSdkVersion=29`，Android 11–16 上相册/存储权限
   现在能正常申请、授权、读取；拼接页补「去设置 / 重试 / 返回自动重扫」。
+- `1.1.0`（versionCode 3）—— 新增「视频压缩」工具：`icu.wwj.drive.compress`，MediaCodec 硬转码，
+  保持分辨率/帧率/编码/音轨/元数据，按目标体积或比例降码率。
 
 ---
 
-## 10. 验证记录
+## 11. 验证记录
 
 2026-11-24，HUAWEI P30（ELE-AL00 / Android 10 / API 29）真机，整合后首次构建的 `out/drive.apk`：
 
@@ -287,6 +373,7 @@ Android 13+ 上 `READ_MEDIA_VIDEO` 单独授予对 targetSdk 29 的应用**无�
 | 崩溃 | logcat `FATAL EXCEPTION` / `E AndroidRuntime` 均为 0 |
 | 旧包 | `com.dashcam.app` / `.probe` / `.stitch` 保持原样，未卸载未改动 |
 | 相册权限修复（v1.0.1） | Android 11 / 14 / 16 三个模拟器 + Android 16 真机复验：权限弹窗正常出现，授权后拼接扫到素材并成组；Android 11 上还验证了「拒绝 → 去设置 → 返回自动重扫」 |
+| 视频压缩（v1.1.0） | P30（Android 10）与 OnePlus（Android 16）真机 + 独立复验 7/7 通过：4K HEVC target 15MB → 14.93MB（600 帧/30fps/hvc1/无 B 帧/首包 DTS=0/无 elst）；1080p H.264 target 8MB → 7.40MB（AAC 直通，首轮超 0.46% 自动重试）；旋转矩阵与 VFR 帧数保留；取消与 force-stop 均无残留；MediaStore 行 `is_pending=0` 且相册可播 |
 
 > 设备的旧 App 与新 App 可以并存；确认新包没问题后，旧包可直接 `adb uninstall`。
 
