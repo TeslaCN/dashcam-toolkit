@@ -119,6 +119,20 @@ public class RecordingSession {
     private long lastIsoAdjustMs;
     private CaptureRequest.Builder requestBuilder;
     private boolean manualExposure;
+    private boolean plateAutoExposure;
+    private boolean adaptiveEv;
+    private int adaptiveEvSteps;
+    private double adaptiveSceneLuma = -1;
+    private long lastAdaptiveEvMs;
+    private long lastAdaptiveLogMs;
+    private long lastAdaptiveEvStepMs;
+    private final PlateAeController plateAe = new PlateAeController();
+    private long lastPlateAeMs;
+    private byte[] meterY, meterU, meterV;
+    private long lastAeLogMs;
+    /** Metering stream size: large enough to see a plate at 10-15m for the adaptive AE. */
+    private static final int METER_W = 960;
+    private static final int METER_H = 540;
     private boolean lowBatteryStopped;
 
     public void start() {
@@ -529,6 +543,42 @@ public class RecordingSession {
                 + "x optical) + " + activeZoom + "x digital");
     }
 
+    /** One-shot capability dump: AE ranges/steps, ISO/shutter ranges, AE regions, HDR scene modes
+     *  and Huawei vendor tags. Used to pick the exposure controller's operating envelope. */
+    private void logCapabilities() {
+        try {
+            CameraManager cm = (CameraManager) ctx.getSystemService(Context.CAMERA_SERVICE);
+            CameraCharacteristics cc = cm.getCameraCharacteristics(String.valueOf(activeCameraId));
+            Log.i(TAG, "cap hwlevel=" + cc.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+                    + " caps=" + java.util.Arrays.toString(cc.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES))
+                    + " aeModes=" + java.util.Arrays.toString(cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES))
+                    + " aeCompRange=" + cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+                    + " aeCompStep=" + cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
+                    + " maxAeRegions=" + cc.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE)
+                    + " expRange=" + cc.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                    + " isoRange=" + cc.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                    + " sceneModes=" + java.util.Arrays.toString(cc.get(CameraCharacteristics.CONTROL_AVAILABLE_SCENE_MODES))
+                    + " maxFrameDur=" + cc.get(CameraCharacteristics.SENSOR_INFO_MAX_FRAME_DURATION));
+            float[] focals = cc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+            android.util.SizeF phys = cc.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
+            android.graphics.Rect active = cc.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+            Log.i(TAG, "cap lens focal=" + java.util.Arrays.toString(focals) + " phys=" + phys
+                    + " active=" + active);
+            for (CameraCharacteristics.Key<?> k : cc.getKeys()) {
+                String n = k.getName();
+                if (n == null || !n.startsWith("com.huawei")) continue;
+                String ln = n.toLowerCase(java.util.Locale.US);
+                if (!(ln.contains("hdr") || ln.contains("iso") || ln.contains("exposure"))) continue;
+                try {
+                    Log.i(TAG, "cap hw " + n + "=" + cc.get(k));
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "logCapabilities failed", t);
+        }
+    }
+
     private void openCameraBlocking() throws Exception {
         ensureCameraThread();
         final CountDownLatch latch = new CountDownLatch(1);
@@ -562,21 +612,34 @@ public class RecordingSession {
         if (!latch.await(8, TimeUnit.SECONDS) || camera == null) {
             throw new IllegalStateException("摄像头打开失败: " + (err[0] == null ? "timeout" : err[0]));
         }
+        logCapabilities();
     }
 
     private void createSessionBlocking(Surface camSurface) throws Exception {
-        manualExposure = settings.exposureMode == 1;
+        adaptiveEv = settings.exposureMode == 2;
+        plateAutoExposure = settings.exposureMode == 3;
+        manualExposure = settings.exposureMode == 1 || plateAutoExposure;
         java.util.List<Surface> surfaces = new java.util.ArrayList<>();
         surfaces.add(camSurface);
-        if (manualExposure) {
+        if (manualExposure || adaptiveEv) {
             try {
-                meteringReader = android.media.ImageReader.newInstance(320, 240,
+                int mw = plateAutoExposure ? METER_W : 320;
+                int mh = plateAutoExposure ? METER_H : 240;
+                meteringReader = android.media.ImageReader.newInstance(mw, mh,
                         android.graphics.ImageFormat.YUV_420_888, 2);
                 surfaces.add(meteringReader.getSurface());
                 meteringReader.setOnImageAvailableListener(this::onMeteringFrame, cameraHandler);
             } catch (Throwable t) {
                 Log.w(TAG, "metering stream unavailable, manual exposure without auto ISO", t);
                 meteringReader = null;
+            }
+            if (meteringReader == null) {
+                // 没有测光流：车牌模式/自适应 EV 都无法闭环，回退到系统 AE + 固定 EV，
+                // 避免停在 seed 曝光把画面拍死。
+                Log.w(TAG, "metering unavailable -> fallback to auto AE + fixed EV");
+                plateAutoExposure = false;
+                adaptiveEv = false;
+                manualExposure = false;
             }
         }
         final CountDownLatch latch = new CountDownLatch(1);
@@ -650,13 +713,28 @@ public class RecordingSession {
             b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
             b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
             long frameNs = 1_000_000_000L / Math.max(1, settings.fps);
-            currentExposureNs = Math.min(settings.shutterNs(), frameNs);
+            if (plateAutoExposure) {
+                currentExposureNs = Math.min(16_666_667L, frameNs);
+                currentIso = 1600;
+                status.exposureLabel = "车牌优先自适应";
+                Log.i(TAG, "plate AE: metering " + METER_W + "x" + METER_H
+                        + ", ISO " + deviceIsoMin + ".." + Math.min(settings.maxIso(), deviceIsoMax));
+            } else {
+                currentExposureNs = Math.min(settings.shutterNs(), frameNs);
+                status.exposureLabel = Settings.SHUTTER_CAP_LABELS[settings.shutterIndex] + " 自动曝光";
+                Log.i(TAG, "manual exposure: " + settings.shutterNs() + "ns, ISO " + currentIso
+                        + ".." + settings.maxIso() + ", ev=" + settings.ev());
+            }
             b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, currentExposureNs);
             b.set(CaptureRequest.SENSOR_SENSITIVITY, currentIso);
             b.set(CaptureRequest.CONTROL_AE_LOCK, false);
-            status.exposureLabel = Settings.SHUTTER_CAP_LABELS[settings.shutterIndex] + " 自动曝光";
-            Log.i(TAG, "manual exposure: " + settings.shutterNs() + "ns, ISO " + currentIso
-                    + ".." + settings.maxIso() + ", ev=" + settings.ev());
+        } else if (adaptiveEv) {
+            b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
+            b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+            adaptiveEvSteps = Math.round(settings.ev() / 0.5f);
+            applyEvSteps(b, adaptiveEvSteps);
+            status.exposureLabel = "自适应 EV（高光保护）";
+            Log.i(TAG, "adaptive EV mode: start at " + (adaptiveEvSteps * 0.5f) + "EV");
         } else {
             b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
             b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
@@ -810,6 +888,14 @@ public class RecordingSession {
         android.media.Image image = reader.acquireNextImage();
         if (image == null) return;
         try {
+            if (plateAutoExposure) {
+                handlePlateAe(image);
+                return;
+            }
+            if (adaptiveEv) {
+                handleAdaptiveEv(image);
+                return;
+            }
             android.media.Image.Plane plane = image.getPlanes()[0];
             java.nio.ByteBuffer buf = plane.getBuffer();
             int rowStride = plane.getRowStride();
@@ -908,6 +994,190 @@ public class RecordingSession {
             Log.w(TAG, "metering failed", t);
         } finally {
             image.close();
+        }
+    }
+
+    private void applyEvSteps(CaptureRequest.Builder b, int steps) {
+        try {
+            CameraManager cm = (CameraManager) ctx.getSystemService(Context.CAMERA_SERVICE);
+            CameraCharacteristics cc = cm.getCameraCharacteristics(String.valueOf(activeCameraId));
+            Range<Integer> range = cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
+            int s = steps;
+            if (range != null) s = Math.max(range.getLower(), Math.min(range.getUpper(), s));
+            b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, s);
+        } catch (Throwable t) {
+            Log.w(TAG, "applyEvSteps failed", t);
+        }
+    }
+
+    /**
+     * 自适应 EV：系统 AE 负责曝光，我们只根据"曝光归一化场景亮度 + 高光裁剪"调整 EV。
+     * 目标：夜间自动落到 -1.5 左右保护车牌，白天回到 0 避免车牌发黑，隧道/过渡 -1。
+     * 比逐帧手动曝光稳，且不需要车牌检测。
+     */
+    private void handleAdaptiveEv(android.media.Image image) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastAdaptiveEvMs < 150) return;
+        lastAdaptiveEvMs = now;
+        try {
+            android.media.Image.Plane p0 = image.getPlanes()[0];
+            java.nio.ByteBuffer b0 = p0.getBuffer();
+            int rowStride = p0.getRowStride();
+            int ps = p0.getPixelStride();
+            int w = image.getWidth(), h = image.getHeight();
+            long sum = 0, clip = 0;
+            int n = 0;
+            int x0 = w / 5, x1 = w * 4 / 5, y0 = h * 45 / 100, y1 = h * 92 / 100;
+            int[] hist = new int[256];
+            for (int y = y0; y < y1; y += 2) {
+                int row = y * rowStride;
+                for (int x = x0; x < x1; x += 2) {
+                    int off = row + x * ps;
+                    if (off >= b0.capacity()) continue;
+                    int v = b0.get(off) & 0xFF;
+                    hist[v]++;
+                    sum += v;
+                    n++;
+                    if (v >= 246) clip++;
+                }
+            }
+            if (n == 0) return;
+            double p50 = 0, p99 = 0;
+            int acc = 0;
+            for (int i = 0; i < 256; i++) {
+                acc += hist[i];
+                if (p50 == 0 && acc >= n * 0.5) p50 = i;
+                if (acc >= n * 0.99) { p99 = i; break; }
+            }
+            double mean = sum / (double) n;
+            double clipPct = clip * 100.0 / n;
+
+            // 曝光归一化：折算到 1/60s、ISO800 的亮度（与当前 AE 实际曝光无关）
+            double exp = lastResultExposureNs > 0 ? lastResultExposureNs : 16_666_667.0;
+            double iso = lastResultIso > 0 ? lastResultIso : 800.0;
+            double norm = mean * (16_666_667.0 / exp) * (800.0 / iso);
+            if (adaptiveSceneLuma < 0) adaptiveSceneLuma = norm;
+            else adaptiveSceneLuma = 0.7 * adaptiveSceneLuma + 0.3 * norm;
+
+            int scene;
+            double a = adaptiveSceneLuma;
+            if (a < 80) scene = 3;        // night
+            else if (a < 400) scene = 2;  // dusk/tunnel
+            else scene = 1;               // day
+
+            int baseSteps;
+            switch (scene) {
+                case 3: baseSteps = -3; break;   // -1.5EV
+                case 2: baseSteps = -2; break;   // -1.0EV
+                default: baseSteps = 0; break;   // 0EV
+            }
+            // 高光反馈：车牌/路灯把 p99 打满且裁剪明显时再压半档（最低 -2.0EV）
+            if (clipPct > 6.0 || p99 >= 252) baseSteps = Math.min(baseSteps, -3);
+            if (clipPct > 15.0) baseSteps = -4;
+
+            int target = baseSteps;
+            if (now - lastAdaptiveLogMs > 1000) {
+                lastAdaptiveLogMs = now;
+                Log.i("DashcamAEV", "scene=" + scene + " norm=" + Math.round(adaptiveSceneLuma)
+                        + " mean=" + Math.round(mean) + " p50=" + Math.round(p50)
+                        + " p99=" + Math.round(p99)
+                        + " clip=" + String.format(java.util.Locale.US, "%.1f", clipPct)
+                        + " exp=" + (lastResultExposureNs / 1000) + "us iso=" + lastResultIso
+                        + " ev=" + (adaptiveEvSteps * 0.5f) + " -> " + (target * 0.5f));
+            }
+            if (target != adaptiveEvSteps) {
+                // 每步 0.5EV，最多 1 秒变一次，避免 AE 抖动
+                if (now - lastAdaptiveEvStepMs < 800) return;
+                lastAdaptiveEvStepMs = now;
+                adaptiveEvSteps = target;
+                applyEvSteps(requestBuilder, adaptiveEvSteps);
+                try {
+                    captureSession.setRepeatingRequest(requestBuilder.build(), resultCallback, cameraHandler);
+                } catch (Throwable t) {
+                    Log.w(TAG, "adaptive EV apply failed", t);
+                }
+                status.exposureLabel = "自适应 EV " + (adaptiveEvSteps * 0.5f) + "EV";
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "adaptive EV failed", t);
+        }
+    }
+
+    /** 车牌优先自适应曝光：960×540 测光 → PlateAeController → 逐帧改曝光/ISO。 */
+    private void handlePlateAe(android.media.Image image) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastPlateAeMs < 150) return;
+        lastPlateAeMs = now;
+        try {
+            android.media.Image.Plane p0 = image.getPlanes()[0];
+            android.media.Image.Plane p1 = image.getPlanes()[1];
+            android.media.Image.Plane p2 = image.getPlanes()[2];
+            int w = image.getWidth(), h = image.getHeight();
+            int yLen = Math.min(p0.getRowStride() * h, p0.getBuffer().limit());
+            int uLen = Math.min(p1.getRowStride() * (h / 2), p1.getBuffer().limit());
+            int vLen = Math.min(p2.getRowStride() * (h / 2), p2.getBuffer().limit());
+            if (meterY == null || meterY.length < yLen) meterY = new byte[yLen];
+            if (meterU == null || meterU.length < uLen) meterU = new byte[uLen];
+            if (meterV == null || meterV.length < vLen) meterV = new byte[vLen];
+            java.nio.ByteBuffer b0 = p0.getBuffer();
+            java.nio.ByteBuffer b1 = p1.getBuffer();
+            java.nio.ByteBuffer b2 = p2.getBuffer();
+            b0.position(0); b0.limit(Math.min(b0.capacity(), yLen));
+            b1.position(0); b1.limit(Math.min(b1.capacity(), uLen));
+            b2.position(0); b2.limit(Math.min(b2.capacity(), vLen));
+            b0.get(meterY, 0, b0.limit());
+            b1.get(meterU, 0, b1.limit());
+            b2.get(meterV, 0, b2.limit());
+
+            PlateAeController.Input in = new PlateAeController.Input();
+            in.y = meterY;
+            in.u = meterU;
+            in.v = meterV;
+            in.width = w;
+            in.height = h;
+            in.rowStride = p0.getRowStride();
+            in.pixelStride = p0.getPixelStride();
+            in.uvRowStride = p1.getRowStride();
+            in.uvPixelStride = p1.getPixelStride();
+            in.nowMs = now;
+            in.exposureNs = currentExposureNs;
+            in.iso = currentIso;
+            in.speedKph = status.speedKph;
+            in.fps = settings.fps;
+            in.isoMin = deviceIsoMin;
+            in.isoMax = Math.min(settings.maxIso(), deviceIsoMax);
+
+            PlateAeController.Output out = plateAe.onFrame(in);
+            status.iso = out.iso;
+            status.luma = (float) out.roadP50;
+            status.exposureLabel = "车牌自适应 " + PlateAeController.sceneName(out.scene)
+                    + " " + (out.exposureNs / 1000) + "us/ISO" + out.iso;
+            if (out.changed) {
+                currentExposureNs = out.exposureNs;
+                currentIso = out.iso;
+                try {
+                    requestBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, currentExposureNs);
+                    requestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, currentIso);
+                    captureSession.setRepeatingRequest(requestBuilder.build(), resultCallback, cameraHandler);
+                } catch (Throwable t) {
+                    Log.w(TAG, "plate AE apply failed", t);
+                }
+            }
+            if (now - lastAeLogMs > 1000) {
+                lastAeLogMs = now;
+                Log.i("DashcamAE", "scene=" + PlateAeController.sceneName(out.scene)
+                        + " blocks=" + out.plateBlocks
+                        + " plateP90=" + Math.round(out.plateP90)
+                        + " clip=" + String.format(java.util.Locale.US, "%.1f", out.plateClipPct)
+                        + " roadP90=" + Math.round(out.roadP90)
+                        + " amb=" + Math.round(out.ambient)
+                        + " sceneLuma=" + Math.round(out.sceneLuma)
+                        + " -> " + (out.exposureNs / 1000) + "us/ISO" + out.iso
+                        + " target=" + Math.round(out.target)
+                        + " note=" + out.note);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "plate AE failed", t);
         }
     }
 

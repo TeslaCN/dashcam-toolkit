@@ -16,6 +16,7 @@
 | **行车记录仪** | `icu.wwj.drive.dashcam` | 循环录像（段间无空洞）、时间/GPS/速度水印烧录、HEVC 硬编、1080P/720P、息屏后台录制、存储配额 FIFO 覆盖、看门狗自愈、相册式回看 |
 | **四视角拼接** | `icu.wwj.drive.stitch` | 同一时刻 MAIN/LEFT/BACK/RIGHT 四路素材拼成一张画面，几何不裁剪不拉伸，按目标体积分配码率，末尾 15 秒提码率保车牌 |
 | **视频压缩** | `icu.wwj.drive.compress` | 保持分辨率/帧率/编码/音轨/旋转等元数据，按目标体积或比例降码率，输出到相册 |
+| **曝光控制**（记录仪） | `icu.wwj.drive.dashcam` | 全场景自适应 EV（默认，高光保护）；车牌优先闭环（实验）。见 [docs/exposure/design.md](docs/exposure/design.md) |
 
 三个功能共享同一个 APK、同一个 `Application`（`icu.wwj.drive.DriveApp`），首页是工具列表。
 以后新增功能（胎压、油耗、停车监控、蓝牙遥控……）按第 6 节的方式挂进来，首页自动出现入口。
@@ -332,8 +333,35 @@ adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
 
 ---
 
-## 9. 已知限制
+## 9. 曝光控制（v1.2.0 新增）
 
+固定 EV 无法同时照顾夜间和白天，这一点有实测证据（夜间 1/50 ISO115 把动态范围压扁；白天 -1.5EV 约欠曝 7 档）：
+取证见 [docs/exposure/forensics.md](docs/exposure/forensics.md)，技术调研见 [docs/exposure/research.md](docs/exposure/research.md)，
+完整方案见 [docs/exposure/design.md](docs/exposure/design.md)。
+
+设置 →「曝光模式」现在有四种：
+
+| 模式 | 行为 | 说明 |
+|---|---|---|
+| 0 自动（系统 AE + 固定 EV） | 旧行为 | 兼容/对照 |
+| 1 快门上限 + 自动曝光/ISO | 自建 ISO 闭环 | 手动控光 |
+| 2 **全场景自适应（高光保护）** | 系统 AE + 曝光归一化场景亮度 + 高光裁剪反馈，自动在 0 / -1 / -1.5EV 间调整 | **默认**，解决"夜间要 -1.5、白天要 0" |
+| 3 车牌优先（实验） | 960×540 测光 + 结构高光块 + 50Hz 快门档 + 车速快门上限 + 过曝先缩曝光 | 实验，见设计文档 |
+
+关键结论（细节与参数见设计文档）：
+
+- **50Hz 硬约束**：手动曝光下 antibanding 不生效，夜间只能用 10/20/30ms（1/100、1/50、1/30）；1/200s 会有条纹。
+- **分辨率比曝光更决定车牌可读性**：1080p 在 10m 处 44cm 车牌只有约 63px，而可读门槛约 ≥88px（建议 ≥120px）；优先 1080p + 2× 变焦或 2.1× 长焦，4K 在本机 HAL 不稳定。
+- **1/50s 只适合同速跟车**（相对速度 ≤3.6km/h）；横穿/对向车牌需要 ≥1/200s，夜间受 50Hz 与无 HDR 限制无法两全。
+- 夜间"尾灯红光浸染"是读不出字的主因（字符-底色差从 59 掉到 19），曝光只能部分缓解，不能根治。
+
+调试日志：`DashcamAEV`（自适应 EV：scene/norm/p99/clip/EV）、`DashcamAE`（车牌优先实验：blocks/plateP90/曝光/ISO）。
+
+---
+
+## 10. 已知限制
+
+- **曝光**：夜间 50Hz 限制手动快门最快 1/100，横穿/对向车牌拖影无法完全消除（HDR 在 P30 第三方不可用）；"车牌优先"是实验模式，默认是自适应 EV；隧道素材尚未实测。
 - **视频压缩只支持 AAC 音轨直通**，AC-3/Opus 等会明确报错；10bit/HDR 直接拒绝。
 - **视频压缩的 creation_time 会变成压缩时间**（MediaMuxer 不支持写），其余可迁移元数据（旋转/位置/色彩/相册日期）都会保留。
 - **目标体积受硬件编码器码率下限约束**：目标极小时（bpp 低于约 0.008）重试两次后仍可能略超，界面会显示实际体积。
@@ -349,17 +377,19 @@ adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
 
 ---
 
-## 10. 版本
+## 11. 版本
 
 - `1.0.0`（versionCode 1）—— 记录仪 v2.23 + 拼接 v1.0 的首次整合。
 - `1.0.1`（versionCode 2）—— 修复存储权限声明：去掉 `maxSdkVersion=29`，Android 11–16 上相册/存储权限
   现在能正常申请、授权、读取；拼接页补「去设置 / 重试 / 返回自动重扫」。
 - `1.1.0`（versionCode 3）—— 新增「视频压缩」工具：`icu.wwj.drive.compress`，MediaCodec 硬转码，
   保持分辨率/帧率/编码/音轨/元数据，按目标体积或比例降码率。
+- `1.2.0`（versionCode 4）—— 曝光控制重做：取证 + 调研 + 自适应 EV（默认，高光保护）+ 车牌优先实验模式；
+  旧安装的"自动+固定 EV"会迁移到自适应 EV。文档在 `docs/exposure/`。
 
 ---
 
-## 11. 验证记录
+## 12. 验证记录
 
 2026-11-24，HUAWEI P30（ELE-AL00 / Android 10 / API 29）真机，整合后首次构建的 `out/drive.apk`：
 
@@ -375,6 +405,9 @@ adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
 | 崩溃 | logcat `FATAL EXCEPTION` / `E AndroidRuntime` 均为 0 |
 | 旧包 | `com.dashcam.app` / `.probe` / `.stitch` 保持原样，未卸载未改动 |
 | 相册权限修复（v1.0.1） | Android 11 / 14 / 16 三个模拟器 + Android 16 真机复验：权限弹窗正常出现，授权后拼接扫到素材并成组；Android 11 上还验证了「拒绝 → 去设置 → 返回自动重扫」 |
+| 曝光取证（v1.2.0） | 18 个 4K 车牌 ROI、6 类失败模式、夜间 `1/50 ISO115` 动态范围被压扁的实测证据；可读阈值（宽≥88px、字符-底色差≥36、对比度≥45）；运动模糊快门/相对速度表 |
+| 自适应 EV（v1.2.0） | P30 夜间实测：`scene=NIGHT norm=14 p99=56 ev=-1.5` 稳定无振荡；离线仿真 day/dusk/night 均收敛；白天 EV 回到 0 |
+| 车牌优先实验（v1.2.0） | 设备暗场稳定 10ms/ISO6400；离线仿真收敛；真实道路矩阵（横穿/对向/隧道）**尚未验证** |
 | 视频压缩（v1.1.0） | P30（Android 10）与 OnePlus（Android 16）真机 + 独立复验 7/7 通过：4K HEVC target 15MB → 14.93MB（600 帧/30fps/hvc1/无 B 帧/首包 DTS=0/无 elst）；1080p H.264 target 8MB → 7.40MB（AAC 直通，首轮超 0.46% 自动重试）；旋转矩阵与 VFR 帧数保留；取消与 force-stop 均无残留；MediaStore 行 `is_pending=0` 且相册可播 |
 
 > 设备的旧 App 与新 App 可以并存；确认新包没问题后，旧包可直接 `adb uninstall`。

@@ -38,7 +38,7 @@ public class Settings {
     public static final String[] ZOOM_LABELS = {"1.0x（广角）", "1.5x", "2.0x（车牌模式）", "3.0x（特写）"};
     public static final int[] MAX_ISO = {800, 1600, 3200, 6400};
     public static final String[] MAX_ISO_LABELS = {"ISO 上限 800", "ISO 上限 1600", "ISO 上限 3200", "ISO 上限 6400"};
-    public static final String[] EXPOSURE_MODE_LABELS = {"自动（系统 AE + EV）", "快门上限 + 自动曝光/ISO"};
+    public static final String[] EXPOSURE_MODE_LABELS = {"自动（系统 AE + 固定 EV）", "快门上限 + 自动曝光/ISO", "全场景自适应（高光保护）", "车牌优先（实验）"};
     public static final int[] FPS_OPTIONS = {30, 25, 24};
     public static final String[] FPS_LABELS = {"30 fps", "25 fps", "24 fps（更省空间/更亮）"};
     public static final String[] DRIVING_MODE_LABELS = {
@@ -80,7 +80,7 @@ public class Settings {
     public String outDirOverride = null; // transient (tests only): alternate output directory
     public boolean brakeTrigger = false; // disabled: road vibrations trigger false positives; keep event-clip infra for future Bluetooth remote
     public boolean eis = false;       // video stabilization (crop + resample)
-    public int exposureMode = 0;      // 0 = auto, 1 = manual shutter + auto ISO
+    public int exposureMode = 2;      // 0=auto+fixed EV, 1=manual shutter+auto ISO, 2=adaptive EV, 3=plate-priority (experimental)
     public int shutterIndex = 2;      // 1/125
     public int evIndex = 4;           // 0.0 EV (index into EV_LABELS)
     public int maxIso = 6400;         // actual ISO cap (clamped to the device's sensitivity range)
@@ -119,7 +119,13 @@ public class Settings {
         s.highlightPriority = sp.getBoolean("highlight_priority", true);
         s.eis = sp.getBoolean("eis", false);
         s.brakeTrigger = false; // accelerometer trigger disabled; event clips wait for explicit trigger (e.g. future Bluetooth remote)
-        s.exposureMode = sp.getInt("exposure_mode", 0);
+        s.exposureMode = sp.getInt("exposure_mode", 2);
+        if (schema < 3) {
+            // v1.2.0: 默认曝光模式从"固定 EV"迁移到"全场景自适应（高光保护）"。
+            // 用户显式选过的手动模式（1）保留。
+            if (s.exposureMode == 0) s.exposureMode = 2;
+            sp.edit().putInt("exposure_mode", s.exposureMode).putInt("schema_version", 3).apply();
+        }
         s.shutterIndex = sp.getInt("shutter_index", 2);
         s.evIndex = sp.getInt("ev_index", 4);
         int legacyIdx = Math.max(0, Math.min(MAX_ISO.length - 1, sp.getInt("max_iso_index", 3)));
