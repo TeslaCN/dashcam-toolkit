@@ -1,7 +1,11 @@
-# 曝光离线验证工具
+# 曝光离线验证 / 路测采集工具
 
-两个小工具，用来在没有实车素材时验证 `PlateAeController` 的场景分类/代理块/收敛行为。
-它们直接编译 `../../src/icu/wwj/drive/dashcam/PlateAeController.java`，不需要 Android 设备。
+用于在没有实车素材时验证 `PlateAeController`，以及路测时一次采集足够数据。
+
+## 0. 依赖
+
+- JDK：默认 `~/.sdkman/candidates/java/current`，可 `JAVA_HOME=...`；
+- ffmpeg、Python 3；`extract_bracket.py`/`make_targets.py` 需要 Pillow。
 
 ## 1. 合成场景闭环仿真
 
@@ -9,8 +13,7 @@
 ./run_sim.sh
 ```
 
-输出三组场景（夜间/白天/黄昏）每帧的 p90、曝光、ISO、EV，用来检查收敛、振荡和边界行为。
-参数在 `PlateAeSim.java` 顶部（场景辐亮度、车速、目标）。
+输出夜间/白天/黄昏每帧的 p90、曝光、ISO、EV，检查收敛/振荡/边界。
 
 ## 2. 真实素材回放
 
@@ -18,16 +21,38 @@
 ./run_clip.sh ../../../某段行车.mp4 1 180
 ```
 
-脚本会用 ffmpeg 抽 960×540 原始 YUV（1fps），喂给控制器并打印：
+抽 960×540 原始 YUV 喂控制器，打印 `scene / blocks / p90 / clip / roadP90`。
 
+## 3. AE CSV 分析
+
+App 设置里打开「记录曝光遥测 CSV」，文件在
+`Android/data/icu.wwj.drive/files/ae_*.csv`。
+
+```bash
+python3 analyze_ae.py ae_20261126_224403.csv
 ```
-帧号 scene=... amb=... sceneLuma=... blocks=... p90=... clip=... roadP90=...
+
+按 `mode/scene/EV` 汇总实际曝光、ISO、ROI 分位/裁剪率，用来判断自适应 EV 选得对不对。
+
+## 4. EV 包围抽帧
+
+路测时打开「自动 EV 包围」（每 5 秒 +0.5→0→-0.5→-1→-1.5→-2 EV）：
+
+```bash
+python3 extract_bracket.py ae_YYYYmmdd_HHMMSS.csv DASHCAM_*.mp4
 ```
 
-- `blocks`：被判为"车牌代理"的高亮结构块数量；
-- `p90`：代理块亮度（控制的观测量）；
-- `sceneLuma`：曝光归一化场景亮度（用于昼夜分类）。
+每档 EV 抽一帧，带 EV/ISO/裁剪率标注，并生成 `bracket_sheet.jpg` 接触表。
 
-## 3. 需要 JDK
+## 5. 车牌靶标
 
-脚本默认用 `~/.sdkman/candidates/java/current`，也可 `JAVA_HOME=... ./run_sim.sh`。
+```bash
+./make_targets.py
+```
+
+生成 `targets/plate_targets_A4.pdf`（蓝/黄/绿/白四块，A4 横向，打印宽 260mm）与单张 PNG。
+打印后量实际宽度：等效真实距离 = 实测距离 × 440 / 打印宽度。也可直接全屏显示在显示器上做亮度扫描。
+
+## 6. 实验室/路测协议
+
+见 [docs/exposure/validation.md](../../docs/exposure/validation.md)：测试矩阵、adb 命令、CSV 列说明、验收判据。

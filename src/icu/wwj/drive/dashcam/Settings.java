@@ -77,6 +77,8 @@ public class Settings {
     public boolean highlightPriority = true; // protect plate highlights (esp. at night)
     public boolean allow4k = false;   // transient (test hook): bypass the 4K blocklist
     public boolean diagExposure = false; // transient: log per-frame exposure/ISO
+    public boolean aeLog = false;        // write per-second AE telemetry CSV (road-test tuning)
+    public boolean evBracket = false;    // road-test: cycle EV 0 / -0.5 / ... / -2 every 5s
     public String outDirOverride = null; // transient (tests only): alternate output directory
     public boolean brakeTrigger = false; // disabled: road vibrations trigger false positives; keep event-clip infra for future Bluetooth remote
     public boolean eis = false;       // video stabilization (crop + resample)
@@ -98,6 +100,8 @@ public class Settings {
         s.watermark = sp.getBoolean("watermark", true);
         s.watermarkExposure = sp.getBoolean("watermark_exposure", false);
         s.watermarkPlace = sp.getBoolean("watermark_place", false);
+        s.aeLog = sp.getBoolean("ae_log", false);
+        s.evBracket = sp.getBoolean("ev_bracket", false);
 
         s.showPreview = sp.getBoolean("show_preview", true);
         s.upsideDownMount = sp.getBoolean("mount_upside_down", false);
@@ -145,6 +149,8 @@ public class Settings {
                 .putBoolean("watermark", watermark)
                 .putBoolean("watermark_exposure", watermarkExposure)
                 .putBoolean("watermark_place", watermarkPlace)
+                .putBoolean("ae_log", aeLog)
+                .putBoolean("ev_bracket", evBracket)
 
                 .putBoolean("show_preview", showPreview)
                 .putBoolean("mount_upside_down", upsideDownMount)

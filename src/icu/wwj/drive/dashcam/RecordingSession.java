@@ -431,6 +431,8 @@ public class RecordingSession {
         if (!running) return;
         running = false;
         mainHandler.removeCallbacks(tick);
+        mainHandler.removeCallbacks(bracketTick);
+        closeAeCsv();
         try {
             if (cameraHandler != null) cameraHandler.removeCallbacksAndMessages(null);
         } catch (Throwable ignored) {
@@ -619,9 +621,16 @@ public class RecordingSession {
         adaptiveEv = settings.exposureMode == 2;
         plateAutoExposure = settings.exposureMode == 3;
         manualExposure = settings.exposureMode == 1 || plateAutoExposure;
+        bracketMode = settings.evBracket;
+        if (bracketMode) {
+            // 路测包围曝光必须走系统 AE（只改 EV），不能和自适应/手动闭环打架
+            adaptiveEv = false;
+            plateAutoExposure = false;
+            manualExposure = false;
+        }
         java.util.List<Surface> surfaces = new java.util.ArrayList<>();
         surfaces.add(camSurface);
-        if (manualExposure || adaptiveEv) {
+        if (manualExposure || adaptiveEv || bracketMode) {
             try {
                 int mw = plateAutoExposure ? METER_W : 320;
                 int mh = plateAutoExposure ? METER_H : 240;
@@ -745,6 +754,16 @@ public class RecordingSession {
         requestBuilder = b;
         focusLocked = false;
         captureSession.setRepeatingRequest(b.build(), resultCallback, cameraHandler);
+        openAeCsv();
+        if (bracketMode) {
+            // 立即应用第一档，保证 CSV 的 ev_steps 和画面实际 EV 一致
+            bracketEvSteps = BRACKET_STEPS[0];
+            bracketIdx = 1;
+            applyEvSteps(b, bracketEvSteps);
+            captureSession.setRepeatingRequest(b.build(), resultCallback, cameraHandler);
+            status.exposureLabel = "EV包围 " + evText(bracketEvSteps) + "EV";
+            mainHandler.postDelayed(bracketTick, 5000);
+        }
         if (settings.focusMode == 1) startFocusLock();
         reconnectAttempts = 0;
         reconnecting = false;
@@ -797,6 +816,17 @@ public class RecordingSession {
     private volatile long lastResultExposureNs;
     private volatile int lastResultIso;
     private long lastAuxWatermarkMs;
+
+    // ---- road-test telemetry (CSV) / EV bracket ----
+    private java.io.BufferedWriter aeWriter;
+    private String aeCsvPath;
+    private boolean bracketMode;
+    private int bracketIdx;
+    private int bracketEvSteps;
+    private static final int[] BRACKET_STEPS = {1, 0, -1, -2, -3, -4}; // +0.5 .. -2.0 EV
+    private volatile double aeMean, aeP50, aeP90, aeP99, aeClip, aePlateP90, aePlateClip;
+    private volatile int aeScene = -1;
+    private volatile String aeNote = "";
     private volatile String placeName;
     private volatile double geocodedLat = 999;
     private volatile double geocodedLon = 999;
@@ -905,6 +935,10 @@ public class RecordingSession {
             }
             if (adaptiveEv) {
                 handleAdaptiveEv(image);
+                return;
+            }
+            if (bracketMode) {
+                handleBracketStats(image);
                 return;
             }
             android.media.Image.Plane plane = image.getPlanes()[0];
@@ -1021,6 +1055,55 @@ public class RecordingSession {
         }
     }
 
+    /** 包围曝光模式只统计 ROI（不控制曝光），让 CSV 每档 EV 都带场景/高光数据。 */
+    private void handleBracketStats(android.media.Image image) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastAdaptiveEvMs < 150) return;
+        lastAdaptiveEvMs = now;
+        try {
+            android.media.Image.Plane p0 = image.getPlanes()[0];
+            java.nio.ByteBuffer b0 = p0.getBuffer();
+            int rowStride = p0.getRowStride();
+            int ps = p0.getPixelStride();
+            int w = image.getWidth(), h = image.getHeight();
+            long sum = 0, clip = 0;
+            int n = 0;
+            int[] hist = new int[256];
+            int x0 = w / 5, x1 = w * 4 / 5, y0 = h * 45 / 100, y1 = h * 92 / 100;
+            for (int y = y0; y < y1; y += 2) {
+                int row = y * rowStride;
+                for (int x = x0; x < x1; x += 2) {
+                    int off = row + x * ps;
+                    if (off >= b0.capacity()) continue;
+                    int v = b0.get(off) & 0xFF;
+                    hist[v]++;
+                    sum += v;
+                    n++;
+                    if (v >= 246) clip++;
+                }
+            }
+            if (n == 0) return;
+            double p50 = 0, p90 = 0, p99 = 0;
+            int acc = 0;
+            for (int i = 0; i < 256; i++) {
+                acc += hist[i];
+                if (p50 == 0 && acc >= n * 0.5) p50 = i;
+                if (p90 == 0 && acc >= n * 0.9) p90 = i;
+                if (acc >= n * 0.99) { p99 = i; break; }
+            }
+            double mean = sum / (double) n;
+            aeMean = mean; aeP50 = p50; aeP90 = p90; aeP99 = p99;
+            aeClip = clip * 100.0 / n; aePlateP90 = 0; aePlateClip = 0;
+            double exp = lastResultExposureNs > 0 ? lastResultExposureNs : 16_666_667.0;
+            double iso = lastResultIso > 0 ? lastResultIso : 800.0;
+            double norm = mean * (16_666_667.0 / exp) * (800.0 / iso);
+            aeScene = norm < 80 ? 3 : (norm < 400 ? 2 : 1);
+            aeNote = "bracket";
+        } catch (Throwable t) {
+            Log.w(TAG, "bracket stats failed", t);
+        }
+    }
+
     /**
      * 自适应 EV：系统 AE 负责曝光，我们只根据"曝光归一化场景亮度 + 高光裁剪"调整 EV。
      * 目标：夜间自动落到 -1.5 左右保护车牌，白天回到 0 避免车牌发黑，隧道/过渡 -1。
@@ -1053,15 +1136,18 @@ public class RecordingSession {
                 }
             }
             if (n == 0) return;
-            double p50 = 0, p99 = 0;
+            double p50 = 0, p90 = 0, p99 = 0;
             int acc = 0;
             for (int i = 0; i < 256; i++) {
                 acc += hist[i];
                 if (p50 == 0 && acc >= n * 0.5) p50 = i;
+                if (p90 == 0 && acc >= n * 0.9) p90 = i;
                 if (acc >= n * 0.99) { p99 = i; break; }
             }
             double mean = sum / (double) n;
             double clipPct = clip * 100.0 / n;
+            aeMean = mean; aeP50 = p50; aeP90 = p90; aeP99 = p99;
+            aeClip = clipPct; aePlateP90 = 0; aePlateClip = 0; aeNote = "adaptive";
 
             // 曝光归一化：折算到 1/60s、ISO800 的亮度（与当前 AE 实际曝光无关）
             double exp = lastResultExposureNs > 0 ? lastResultExposureNs : 16_666_667.0;
@@ -1075,6 +1161,7 @@ public class RecordingSession {
             if (a < 80) scene = 3;        // night
             else if (a < 400) scene = 2;  // dusk/tunnel
             else scene = 1;               // day
+            aeScene = scene;
 
             int baseSteps;
             switch (scene) {
@@ -1159,6 +1246,10 @@ public class RecordingSession {
             in.isoMax = Math.min(settings.maxIso(), deviceIsoMax);
 
             PlateAeController.Output out = plateAe.onFrame(in);
+            aeScene = out.scene;
+            aeMean = out.roadP50; aeP50 = out.roadP50; aeP90 = out.roadP90; aeP99 = 0;
+            aeClip = out.roadClipPct; aePlateP90 = out.plateP90; aePlateClip = out.plateClipPct;
+            aeNote = out.note;
             status.iso = out.iso;
             status.luma = (float) out.roadP50;
             status.exposureLabel = "车牌自适应 " + PlateAeController.sceneName(out.scene)
@@ -1291,6 +1382,7 @@ public class RecordingSession {
                     return;
                 }
                 updateWatermark();
+                writeAeCsvRow();
                 watchdog();
                 notifyStatus();
             } catch (Throwable t) {
@@ -1298,6 +1390,101 @@ public class RecordingSession {
             } finally {
                 if (running) mainHandler.postDelayed(this, 1000);
             }
+        }
+    };
+
+    private String evText(int steps) {
+        return String.format(Locale.US, "%+.1f", steps * 0.5f);
+    }
+
+    private void openAeCsv() {
+        if (!settings.aeLog || aeWriter != null) return;
+        try {
+            java.io.File dir = ctx.getExternalFilesDir(null);
+            if (dir == null) dir = ctx.getFilesDir();
+            String name = "ae_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+                    .format(new java.util.Date()) + ".csv";
+            java.io.File f = new java.io.File(dir, name);
+            aeWriter = new java.io.BufferedWriter(new java.io.FileWriter(f));
+            aeWriter.write("wall_ms,elapsed_ms,mode,scene,ev_steps,req_exp_ns,req_iso,"
+                    + "act_exp_ns,act_iso,roi_mean,roi_p50,roi_p90,roi_p99,roi_clip_pct,"
+                    + "plate_p90,plate_clip_pct,speed_kph,lat,lon,note\n");
+            aeWriter.flush();
+            aeCsvPath = f.getAbsolutePath();
+            Log.i(TAG, "AE csv: " + aeCsvPath);
+        } catch (Throwable t) {
+            Log.w(TAG, "open AE csv failed", t);
+            aeWriter = null;
+        }
+    }
+
+    private void writeAeCsvRow() {
+        if (!settings.aeLog) return;
+        if (aeWriter == null) openAeCsv();
+        if (aeWriter == null) return;
+        try {
+            String mode;
+            int evSteps;
+            if (bracketMode) {
+                mode = "bracket";
+                evSteps = bracketEvSteps;
+                aeNote = "bracket";
+            } else if (plateAutoExposure) {
+                mode = "plate";
+                evSteps = 0;
+            } else if (adaptiveEv) {
+                mode = "adaptive";
+                evSteps = adaptiveEvSteps;
+            } else if (manualExposure) {
+                mode = "manual";
+                evSteps = settings.evIndex - 4;
+            } else {
+                mode = "auto";
+                evSteps = settings.evIndex - 4;
+            }
+            boolean aeMode = bracketMode || adaptiveEv || (!manualExposure && !plateAutoExposure);
+            long reqExp = aeMode ? lastResultExposureNs : currentExposureNs;
+            int reqIso = aeMode ? lastResultIso : currentIso;
+            aeWriter.write(System.currentTimeMillis() + "," + status.elapsedMs + ","
+                    + mode + "," + aeScene + "," + evSteps + ","
+                    + reqExp + "," + reqIso + ","
+                    + lastResultExposureNs + "," + lastResultIso + ","
+                    + String.format(Locale.US, "%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",
+                    aeMean, aeP50, aeP90, aeP99, aeClip, aePlateP90, aePlateClip) + ","
+                    + String.format(Locale.US, "%.1f", status.speedKph) + ","
+                    + status.lat + "," + status.lon + "," + aeNote.replace(',', ';'));
+            aeWriter.newLine();
+            aeWriter.flush();
+        } catch (Throwable t) {
+            Log.w(TAG, "write AE csv failed", t);
+        }
+    }
+
+    private void closeAeCsv() {
+        if (aeWriter == null) return;
+        try {
+            aeWriter.flush();
+            aeWriter.close();
+        } catch (Throwable ignored) {
+        }
+        aeWriter = null;
+        Log.i(TAG, "AE csv closed: " + aeCsvPath);
+    }
+
+    private final Runnable bracketTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!running || !bracketMode) return;
+            bracketEvSteps = BRACKET_STEPS[bracketIdx];
+            bracketIdx = (bracketIdx + 1) % BRACKET_STEPS.length;
+            try {
+                applyEvSteps(requestBuilder, bracketEvSteps);
+                captureSession.setRepeatingRequest(requestBuilder.build(), resultCallback, cameraHandler);
+                status.exposureLabel = "EV包围 " + evText(bracketEvSteps) + "EV";
+            } catch (Throwable t) {
+                Log.w(TAG, "EV bracket apply failed", t);
+            }
+            mainHandler.postDelayed(this, 5000);
         }
     };
 
@@ -1323,6 +1510,7 @@ public class RecordingSession {
         String aux = null;
         if (settings.watermarkExposure && lastResultExposureNs > 0 && lastResultIso > 0) {
             aux = shutterLabel(lastResultExposureNs) + " ISO " + lastResultIso;
+            if (bracketMode) aux += " EV" + evText(bracketEvSteps);
         }
         r.setOverlay(main.toString(), aux);
     }

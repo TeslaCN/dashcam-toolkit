@@ -356,7 +356,8 @@ adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
 - 夜间"尾灯红光浸染"是读不出字的主因（字符-底色差从 59 掉到 19），曝光只能部分缓解，不能根治。
 - 设置页会实时显示「当前分辨率/变焦下 10m/20m 处车牌像素」：可读门槛 ≥88px、建议 ≥120px，不足时会提示需要的变焦倍数。
 - 离线验证工具在 [tools/exposure/](tools/exposure/)：`run_sim.sh`（合成场景闭环仿真）、`run_clip.sh`（真实素材回放看场景/代理块统计）。
-- 水印的「快门 + ISO」取自最新一帧 `CaptureResult` 的**实际值**，约 3Hz 刷新；固定焦距锁定后也会持续更新（v1.2.2 修复冻结、v1.2.3 提高刷新率）。非标准曝光按实际倒数显示，例如 `1/58`，不会强行凑成标准档。
+- 水印的「快门 + ISO」取自最新一帧 `CaptureResult` 的**实际值**，约 3Hz 刷新；固定焦距锁定后也会持续更新（v1.2.2 修复冻结、v1.2.3 提高刷新率）。
+- 路测采集（v1.3.0）：设置里可开「记录曝光遥测 CSV」和「自动 EV 包围」（每 5 秒 `+0.5→0→-0.5→-1→-1.5→-2 EV`）。CSV 在 `Android/data/icu.wwj.drive/files/ae_*.csv`；分析/抽帧脚本见 [tools/exposure/](tools/exposure/)，实验室/路测协议见 [docs/exposure/validation.md](docs/exposure/validation.md)。非标准曝光按实际倒数显示，例如 `1/58`，不会强行凑成标准档。
 
 调试日志：`DashcamAEV`（自适应 EV：scene/norm/p99/clip/EV）、`DashcamAE`（车牌优先实验：blocks/plateP90/曝光/ISO）。
 
@@ -392,6 +393,7 @@ adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
 - `1.2.1`（versionCode 5）—— 设置页新增车牌像素估算（10m/20m）；离线验证工具入库；车牌优先模式标注"车灯场景慎用"。
 - `1.2.2`（versionCode 6）—— 修复固定焦距锁定后水印快门/ISO 冻结（`lockFocus` 清空了 `CaptureResult` 回调）；水印改取实际值并按标准档格式化；状态栏 ISO 也改为实际值。
 - `1.2.3`（versionCode 7）—— 水印快门/ISO 改为跟随 `CaptureResult` 约 3Hz 刷新（原来等 1s 状态 tick），AE 快速变化时不再对不上帧。
+- `1.3.0`（versionCode 8）—— 路测数据采集：逐秒 AE 遥测 CSV（场景/EV/实际曝光 ISO/ROI 分位/裁剪/GPS）+ 自动 EV 包围模式（每 5 秒一档）；新增 CSV 分析、包围抽帧、可打印车牌靶标和实验室/路测验证协议。
 
 ---
 

@@ -618,6 +618,8 @@ public class DashcamActivity extends Activity {
         plateLine.setPadding(dp(4), dp(6), dp(4), dp(6));
         box.addView(plateLine);
         final CheckBox highlightCheck = addCheck(box, "高光优先（夜间车牌防过曝）", s.highlightPriority);
+        final CheckBox aeLogCheck = addCheck(box, "记录曝光遥测 CSV（路测调参用）", s.aeLog);
+        final CheckBox evBracketCheck = addCheck(box, "路测：自动 EV 包围（每 5 秒换一档 0…-2）", s.evBracket);
         final Spinner sharpenSpinner = addSpinner(box, "锐化", Settings.SHARPEN_LABELS, s.sharpenLevel);
 
         final CheckBox watermark = addCheck(box, "画面水印（时间 / 经纬度）", s.watermark);
@@ -728,6 +730,8 @@ public class DashcamActivity extends Activity {
                     s.upsideDownMount = rotate180.isChecked();
                     s.watermarkExposure = wmExposure.isChecked();
                     s.watermarkPlace = wmPlace.isChecked();
+                    s.aeLog = aeLogCheck.isChecked();
+                    s.evBracket = evBracketCheck.isChecked();
 
                     s.save(this);
                     Toast.makeText(this, service != null && service.isRecording()

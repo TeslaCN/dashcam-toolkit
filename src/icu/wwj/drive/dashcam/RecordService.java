@@ -161,6 +161,8 @@ public class RecordService extends Service {
         s.sharpenLevel = i.getIntExtra("sharpenLevel", s.sharpenLevel);
         s.allow4k = i.getBooleanExtra("allow4k", false);
         s.diagExposure = i.getBooleanExtra("diag", false);
+        s.aeLog = i.getBooleanExtra("aeLog", s.aeLog);
+        s.evBracket = i.getBooleanExtra("evBracket", s.evBracket);
         s.outDirOverride = i.getStringExtra("outDir");
     }
 
