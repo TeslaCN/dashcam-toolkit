@@ -356,7 +356,7 @@ adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
 - 夜间"尾灯红光浸染"是读不出字的主因（字符-底色差从 59 掉到 19），曝光只能部分缓解，不能根治。
 - 设置页会实时显示「当前分辨率/变焦下 10m/20m 处车牌像素」：可读门槛 ≥88px、建议 ≥120px，不足时会提示需要的变焦倍数。
 - 离线验证工具在 [tools/exposure/](tools/exposure/)：`run_sim.sh`（合成场景闭环仿真）、`run_clip.sh`（真实素材回放看场景/代理块统计）。
-- 水印的「快门 + ISO」取自最新一帧 `CaptureResult` 的**实际值**；固定焦距锁定后也会持续更新（v1.2.2 修复）。非标准曝光按实际倒数显示，例如 `1/58`，不会强行凑成标准档。
+- 水印的「快门 + ISO」取自最新一帧 `CaptureResult` 的**实际值**，约 3Hz 刷新；固定焦距锁定后也会持续更新（v1.2.2 修复冻结、v1.2.3 提高刷新率）。非标准曝光按实际倒数显示，例如 `1/58`，不会强行凑成标准档。
 
 调试日志：`DashcamAEV`（自适应 EV：scene/norm/p99/clip/EV）、`DashcamAE`（车牌优先实验：blocks/plateP90/曝光/ISO）。
 
@@ -391,6 +391,7 @@ adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
   旧安装的"自动+固定 EV"会迁移到自适应 EV。文档在 `docs/exposure/`。
 - `1.2.1`（versionCode 5）—— 设置页新增车牌像素估算（10m/20m）；离线验证工具入库；车牌优先模式标注"车灯场景慎用"。
 - `1.2.2`（versionCode 6）—— 修复固定焦距锁定后水印快门/ISO 冻结（`lockFocus` 清空了 `CaptureResult` 回调）；水印改取实际值并按标准档格式化；状态栏 ISO 也改为实际值。
+- `1.2.3`（versionCode 7）—— 水印快门/ISO 改为跟随 `CaptureResult` 约 3Hz 刷新（原来等 1s 状态 tick），AE 快速变化时不再对不上帧。
 
 ---
 

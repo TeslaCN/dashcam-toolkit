@@ -796,6 +796,7 @@ public class RecordingSession {
     private float activeZoom = 1f;
     private volatile long lastResultExposureNs;
     private volatile int lastResultIso;
+    private long lastAuxWatermarkMs;
     private volatile String placeName;
     private volatile double geocodedLat = 999;
     private volatile double geocodedLon = 999;
@@ -809,6 +810,14 @@ public class RecordingSession {
             Integer i = result.get(CaptureResult.SENSOR_SENSITIVITY);
             if (e != null) lastResultExposureNs = e;
             if (i != null) lastResultIso = i;
+            // 水印里的快门/ISO 跟随 CaptureResult 刷新（约 3Hz），而不是等 1s 的状态 tick，
+            // 这样 AE 在两次 tick 之间变化时，水印与画面帧对得上。
+            long now = System.currentTimeMillis();
+            if (settings.watermark && settings.watermarkExposure
+                    && now - lastAuxWatermarkMs > 300) {
+                lastAuxWatermarkMs = now;
+                mainHandler.post(RecordingSession.this::updateWatermark);
+            }
             if (settings.diagExposure) {
                 int f = diagFrame;
                 diagFrame = f + 1;
