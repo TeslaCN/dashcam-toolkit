@@ -69,17 +69,13 @@ public class RecordService extends Service {
             new Thread(() -> {
                 try {
                     String[] p = spec.split(",");
-                    android.location.Geocoder g = new android.location.Geocoder(this, java.util.Locale.CHINA);
-                    java.util.List<android.location.Address> a =
-                            g.getFromLocation(Double.parseDouble(p[0]), Double.parseDouble(p[1]), 1);
-                    if (a != null && !a.isEmpty()) {
-                        android.location.Address ad = a.get(0);
-                        Log.i("DashcamGeo", "geotest ok: " + ad.getAddressLine(0)
-                                + " | locality=" + ad.getLocality() + " sub=" + ad.getSubLocality()
-                                + " thoroughfare=" + ad.getThoroughfare());
-                    } else {
-                        Log.w("DashcamGeo", "geotest: empty result");
-                    }
+                    PlaceNameResolver.Result r = PlaceNameResolver.resolve(this,
+                            Double.parseDouble(p[0]), Double.parseDouble(p[1]));
+                    Log.i("DashcamGeo", "geotest display=" + r.display
+                            + " | groundFull=" + r.groundFull
+                            + " | groundRoad=" + r.groundRoad
+                            + " | elevated=" + r.elevated);
+
                 } catch (Throwable t2) {
                     Log.w("DashcamGeo", "geotest failed", t2);
                 }

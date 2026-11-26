@@ -1488,6 +1488,18 @@ public class RecordingSession {
         }
     };
 
+    private String shutterLabel(long ns) {
+        if (ns <= 0) return "?";
+        double inv = 1e9 / ns;
+        // 优先匹配常见快门档（相机 HAL 报的 29.97ms/33.33ms 等会被显示成 1/30）
+        int[] std = {2000, 1000, 500, 250, 200, 125, 100, 60, 50, 40, 30, 25, 24, 20, 15, 12, 10, 8, 6, 5, 4, 3, 2, 1};
+        for (int v : std) {
+            if (Math.abs(inv - v) / (double) v < 0.035) return "1/" + v;
+        }
+        if (inv >= 1.0) return String.format(Locale.US, "1/%.0f", inv);
+        return String.format(Locale.US, "%.1fs", ns / 1e9);
+    }
+
     private void updateWatermark() {
         GlRenderer r = renderer;
         if (r == null) return;
@@ -1518,24 +1530,16 @@ public class RecordingSession {
     private void geocodeAsync(final double lat, final double lon) {
         new Thread(() -> {
             try {
-                android.location.Geocoder g = new android.location.Geocoder(ctx, Locale.CHINA);
-                java.util.List<android.location.Address> addrs = g.getFromLocation(lat, lon, 1);
-                if (addrs != null && !addrs.isEmpty()) {
-                    android.location.Address a = addrs.get(0);
-                    StringBuilder sb = new StringBuilder();
-                    if (a.getLocality() != null) sb.append(a.getLocality());
-                    if (a.getSubLocality() != null && !sb.toString().contains(a.getSubLocality()))
-                        sb.append(a.getSubLocality());
-                    if (a.getThoroughfare() != null) sb.append(a.getThoroughfare());
-                    String name = sb.toString();
-                    if (!name.isEmpty()) {
-                        placeName = name;
-                        geocodedLat = lat;
-                        geocodedLon = lon;
-                        status.placeName = name;
-                        EventLog.write(ctx, "GEOCODE", name);
-                        Log.i(TAG, "geocode: " + name);
-                    }
+                PlaceNameResolver.Result r = PlaceNameResolver.resolve(ctx, lat, lon);
+                String name = r.display;
+                if (name != null && !name.isEmpty()) {
+                    placeName = name;
+                    geocodedLat = lat;
+                    geocodedLon = lon;
+                    status.placeName = name;
+                    EventLog.write(ctx, "GEOCODE", name);
+                    Log.i(TAG, "geocode: " + name + " [ground=" + r.groundFull
+                            + " elevated=" + r.elevated + "]");
                 } else {
                     Log.w(TAG, "geocode returned no address");
                 }
@@ -1545,20 +1549,6 @@ public class RecordingSession {
         }, "geocode").start();
     }
 
-    /** 1/500 style label from an exposure time in nanoseconds. */
-    private String shutterLabel(long ns) {
-        if (ns <= 0) return "?";
-        double inv = 1e9 / ns;
-        // 优先匹配常见快门档（相机 HAL 报的 29.97ms/33.33ms 等会被显示成 1/30）
-        int[] std = {2000, 1000, 500, 250, 200, 125, 100, 60, 50, 40, 30, 25, 24, 20, 15, 12, 10, 8, 6, 5, 4, 3, 2, 1};
-        for (int v : std) {
-            if (Math.abs(inv - v) / (double) v < 0.035) return "1/" + v;
-        }
-        if (inv >= 1.0) return String.format(Locale.US, "1/%.0f", inv);
-        return String.format(Locale.US, "%.1fs", ns / 1e9);
-    }
-
-    /** Reverse-geocodes the current fix in the background (throttled, cached). */
     private void maybeGeocode() {
         if (!settings.watermarkPlace || !status.gpsFix) return;
         long now = System.currentTimeMillis();
