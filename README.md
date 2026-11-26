@@ -354,6 +354,8 @@ adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
 - **分辨率比曝光更决定车牌可读性**：1080p 在 10m 处 44cm 车牌只有约 63px，而可读门槛约 ≥88px（建议 ≥120px）；优先 1080p + 2× 变焦或 2.1× 长焦，4K 在本机 HAL 不稳定。
 - **1/50s 只适合同速跟车**（相对速度 ≤3.6km/h）；横穿/对向车牌需要 ≥1/200s，夜间受 50Hz 与无 HDR 限制无法两全。
 - 夜间"尾灯红光浸染"是读不出字的主因（字符-底色差从 59 掉到 19），曝光只能部分缓解，不能根治。
+- 设置页会实时显示「当前分辨率/变焦下 10m/20m 处车牌像素」：可读门槛 ≥88px、建议 ≥120px，不足时会提示需要的变焦倍数。
+- 离线验证工具在 [tools/exposure/](tools/exposure/)：`run_sim.sh`（合成场景闭环仿真）、`run_clip.sh`（真实素材回放看场景/代理块统计）。
 
 调试日志：`DashcamAEV`（自适应 EV：scene/norm/p99/clip/EV）、`DashcamAE`（车牌优先实验：blocks/plateP90/曝光/ISO）。
 
@@ -386,6 +388,7 @@ adb shell am start -n icu.wwj.drive/.compress.CompressHomeActivity \
   保持分辨率/帧率/编码/音轨/元数据，按目标体积或比例降码率。
 - `1.2.0`（versionCode 4）—— 曝光控制重做：取证 + 调研 + 自适应 EV（默认，高光保护）+ 车牌优先实验模式；
   旧安装的"自动+固定 EV"会迁移到自适应 EV。文档在 `docs/exposure/`。
+- `1.2.1`（versionCode 5）—— 设置页新增车牌像素估算（10m/20m）；离线验证工具入库；车牌优先模式标注"车灯场景慎用"。
 
 ---
 

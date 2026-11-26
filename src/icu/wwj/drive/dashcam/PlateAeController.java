@@ -199,6 +199,12 @@ public final class PlateAeController {
         long frameNs = 1_000_000_000L / Math.max(1, in.fps);
         long maxShutter = Math.min(frameNs, motionShutterCapNs(in.speedKph));
         long minShutter = Math.min(500_000L, maxShutter);
+        if (scene == SCENE_NIGHT || scene == SCENE_DUSK || scene == SCENE_TUNNEL) {
+            // 50Hz 照明（路灯/隧道灯）下手动 AE 必须用 10ms 整数倍：夜间快门下限锁 1/100。
+            // 这会让横穿/对向车牌有拖影，属于无 HDR 机型的物理上限。
+            minShutter = Math.min(10_000_000L, maxShutter);
+            if (maxShutter < 10_000_000L) maxShutter = Math.min(frameNs, 10_000_000L);
+        }
         int isoFloor = isoFloor(scene);
         int isoCeil = Math.max(isoFloor, Math.min(in.isoMax, 6400));
 

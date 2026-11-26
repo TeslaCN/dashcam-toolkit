@@ -613,6 +613,10 @@ public class DashcamActivity extends Activity {
         final Spinner focusSpinner = addSpinner(box, "对焦", Settings.FOCUS_MODE_LABELS, s.focusMode);
         final Spinner zoomSpinner = addSpinner(box, "视野（数码变焦）", Settings.ZOOM_LABELS, s.zoomIndex);
         final CheckBox autoLensCheck = addCheck(box, "自动选镜头（按视野匹配光学镜头）", s.autoLens);
+        final TextView plateLine = new TextView(this);
+        plateLine.setTextSize(12.5f);
+        plateLine.setPadding(dp(4), dp(6), dp(4), dp(6));
+        box.addView(plateLine);
         final CheckBox highlightCheck = addCheck(box, "高光优先（夜间车牌防过曝）", s.highlightPriority);
         final Spinner sharpenSpinner = addSpinner(box, "锐化", Settings.SHARPEN_LABELS, s.sharpenLevel);
 
@@ -659,10 +663,37 @@ public class DashcamActivity extends Activity {
                     + effective + " Mbps" + note + "，约 "
                     + String.format(Locale.US, "%.1f", mbPerHour / 1024) + " GB/小时");
         };
-        resSpinner.setOnItemSelectedListener(new SimpleItemSelected(updateFormat));
+        final Runnable updatePlate = () -> {
+            int w = sizes[Math.max(0, resSpinner.getSelectedItemPosition())][0];
+            int camId = Settings.CAMERA_IDS[camSpinner.getSelectedItemPosition()];
+            float zoom = Settings.ZOOM_FACTORS[Math.max(0, Math.min(Settings.ZOOM_FACTORS.length - 1,
+                    zoomSpinner.getSelectedItemPosition()))];
+            boolean autoLens = autoLensCheck.isChecked();
+            float equiv = LensInfo.equivFocal(this, camId);
+            if (equiv <= 0) equiv = 27f;
+            // autoLens 下主摄会按视野切换光学镜头，等效焦距约等于 主摄×digitial zoom
+            if (autoLens && camId == 0) equiv = LensInfo.equivFocal(this, 0) * zoom;
+            else equiv = equiv * zoom;
+            double px10 = w * (equiv / 36.0) * 0.44 / 10.0;
+            double px20 = px10 / 2.0;
+            double needZoom = px10 > 0 ? Math.max(1.0, 88.0 / (px10 / zoom)) : 1;
+            boolean ok = px10 >= 88;
+            plateLine.setText(String.format(Locale.US,
+                    "车牌像素估算：10m≈%.0fpx，20m≈%.0fpx（可读≥88，建议≥120）", px10, px20)
+                    + (ok ? "  ✓" : String.format(Locale.US, "  ⚠ 建议 %.1f× 变焦或换长焦", needZoom)));
+            plateLine.setTextColor(ok ? 0xFF81C784 : 0xFFFFB74D);
+        };
+        resSpinner.setOnItemSelectedListener(new SimpleItemSelected(() -> {
+            updateFormat.run();
+            updatePlate.run();
+        }));
         fpsSpinner.setOnItemSelectedListener(new SimpleItemSelected(updateFormat));
+        zoomSpinner.setOnItemSelectedListener(new SimpleItemSelected(updatePlate));
+        camSpinner.setOnItemSelectedListener(new SimpleItemSelected(updatePlate));
+        autoLensCheck.setOnCheckedChangeListener((b, checked) -> updatePlate.run());
         updf[0] = updateFormat;
         updateFormat.run();
+        updatePlate.run();
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(box);

@@ -38,7 +38,7 @@ public class Settings {
     public static final String[] ZOOM_LABELS = {"1.0x（广角）", "1.5x", "2.0x（车牌模式）", "3.0x（特写）"};
     public static final int[] MAX_ISO = {800, 1600, 3200, 6400};
     public static final String[] MAX_ISO_LABELS = {"ISO 上限 800", "ISO 上限 1600", "ISO 上限 3200", "ISO 上限 6400"};
-    public static final String[] EXPOSURE_MODE_LABELS = {"自动（系统 AE + 固定 EV）", "快门上限 + 自动曝光/ISO", "全场景自适应（高光保护）", "车牌优先（实验）"};
+    public static final String[] EXPOSURE_MODE_LABELS = {"自动（系统 AE + 固定 EV）", "快门上限 + 自动曝光/ISO", "全场景自适应（高光保护）", "车牌优先（实验，车灯场景慎用）"};
     public static final int[] FPS_OPTIONS = {30, 25, 24};
     public static final String[] FPS_LABELS = {"30 fps", "25 fps", "24 fps（更省空间/更亮）"};
     public static final String[] DRIVING_MODE_LABELS = {
