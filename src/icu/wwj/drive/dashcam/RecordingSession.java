@@ -857,7 +857,9 @@ public class RecordingSession {
             requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
             requestBuilder.set(CaptureRequest.LENS_FOCUS_DISTANCE, 0.0f);
             requestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE);
-            captureSession.setRepeatingRequest(requestBuilder.build(), null, cameraHandler);
+            // 必须继续挂 resultCallback：否则锁定对焦后 lastResultExposureNs/ISO 不再更新，
+            // 水印（以及自适应 EV 的曝光归一化）会一直用锁定前那一帧的旧值。
+            captureSession.setRepeatingRequest(requestBuilder.build(), resultCallback, cameraHandler);
             Log.i(TAG, "focus locked (AF off, lens kept at distance)");
         } catch (Throwable t) {
             Log.w(TAG, "lock focus failed", t);
@@ -1247,12 +1249,12 @@ public class RecordingSession {
                             + bs[0] + "% status=" + bs[1] + " temp=" + status.batteryTempC
                             + " segs=" + status.segments + " reconnects=" + status.reconnects);
                 }
-                status.iso = manualExposure ? currentIso : -1;
+                status.iso = manualExposure
+                        ? (lastResultIso > 0 ? lastResultIso : currentIso) : -1;
                 maybeGeocode();
-                if (manualExposure && currentExposureNs > 0) {
-                    double inv = 1e9 / currentExposureNs;
+                if (manualExposure && lastResultExposureNs > 0) {
                     status.exposureLabel = Settings.SHUTTER_CAP_LABELS[settings.shutterIndex]
-                            + " · 实际 1/" + Math.round(inv);
+                            + " · 实际 " + shutterLabel(lastResultExposureNs);
                 }
                 status.luma = lastLuma;
                 if (dir != null && status.freeBytes > 0 && status.freeBytes < 200L * 1024 * 1024) {
@@ -1348,8 +1350,14 @@ public class RecordingSession {
 
     /** 1/500 style label from an exposure time in nanoseconds. */
     private String shutterLabel(long ns) {
-        double inv = 1e9 / Math.max(1, ns);
-        if (inv >= 1.0) return "1/" + Math.round(inv);
+        if (ns <= 0) return "?";
+        double inv = 1e9 / ns;
+        // 优先匹配常见快门档（相机 HAL 报的 29.97ms/33.33ms 等会被显示成 1/30）
+        int[] std = {2000, 1000, 500, 250, 200, 125, 100, 60, 50, 40, 30, 25, 24, 20, 15, 12, 10, 8, 6, 5, 4, 3, 2, 1};
+        for (int v : std) {
+            if (Math.abs(inv - v) / (double) v < 0.035) return "1/" + v;
+        }
+        if (inv >= 1.0) return String.format(Locale.US, "1/%.0f", inv);
         return String.format(Locale.US, "%.1fs", ns / 1e9);
     }
 
