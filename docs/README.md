@@ -9,6 +9,7 @@
 | [exposure/forensics.md](exposure/forensics.md) | 素材取证：失败模式、测量数据、可读阈值、复现命令 | 历史证据，数值不改 |
 | [exposure/research.md](exposure/research.md) | Camera2/车牌物理/业界方案调研与引用 | 历史素材，参数以代码为准 |
 | [../tools/exposure/README.md](../tools/exposure/README.md) | 离线仿真、CSV 分析、靶标生成工具的最短用法 | 随工具更新 |
+| [ui/main-screen-redesign.md](ui/main-screen-redesign.md) | 主界面/交互重设计方案、操作去留、设置信息架构、线框图 | 设计提案，待选型 |
 
 ## 维护约定
 

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>主界面方案线框图</title>
+<style>
+  body{margin:0;background:#0b0f14;color:#e6edf3;font-family:"Noto Sans CJK SC","Noto Sans CJK",sans-serif;}
+  .page{width:1240px;margin:0 auto;padding:28px 0 40px;}
+  h1{font-size:26px;margin:0 0 6px;}
+  .sub{color:#8b949e;font-size:13px;margin-bottom:24px;}
+  .scheme{margin:0 0 30px;}
+  .scheme h2{font-size:18px;margin:0 0 6px;color:#58a6ff;}
+  .scheme p{color:#8b949e;font-size:13px;margin:0 0 10px;}
+  .frame{width:1180px;height:664px;background:#111820;border:1px solid #30363d;border-radius:18px;
+         position:relative;overflow:hidden;box-shadow:0 8px 30px #0008;}
+  .topbar{position:absolute;left:0;right:0;top:0;height:74px;background:#0d141c;display:flex;align-items:center;gap:14px;padding:0 22px;box-sizing:border-box;border-bottom:1px solid #21262d;}
+  .rec{color:#3fb950;font-weight:700;font-size:20px;}
+  .chip{background:#21262d;color:#c9d1d9;border-radius:999px;padding:7px 13px;font-size:13px;}
+  .ghost{color:#8b949e;font-size:13px;margin-left:auto;}
+  .body{position:absolute;top:74px;left:0;right:0;bottom:0;padding:18px 22px;box-sizing:border-box;}
+  .preview{height:360px;border-radius:14px;background:
+     radial-gradient(ellipse at 50% 55%,#3d4b5c 0%,#1b2531 45%,#0b0f14 100%);
+     border:1px solid #21262d;position:relative;overflow:hidden;}
+  .preview:after{content:"实时画面 / 预览";position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);color:#6e7b8b;font-size:15px;letter-spacing:1px;}
+  .bottombar{position:absolute;left:20px;right:20px;bottom:18px;display:flex;gap:12px;align-items:center;}
+  .btn{border-radius:13px;padding:0 24px;height:66px;min-width:190px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#fff;}
+  .green{background:#2ea043;}
+  .red{background:#da3633;}
+  .dark{background:#21262d;color:#c9d1d9;min-width:0;height:66px;padding:0 20px;font-size:14px;font-weight:500;}
+  .iconbtn{width:66px;height:66px;border-radius:15px;background:#21262d;color:#c9d1d9;display:flex;align-items:center;justify-content:center;font-size:13px;}
+  .homeTools{margin-top:16px;display:flex;gap:14px;}
+  .tool{flex:1;background:#161d26;border:1px solid #21262d;border-radius:12px;padding:14px 18px;color:#c9d1d9;}
+  .tool b{display:block;font-size:16px;margin-bottom:4px;} .tool span{color:#8b949e;font-size:12px;}
+  .bigstatus{position:absolute;left:22px;right:22px;top:18px;background:#111a23;border:1px solid #30363d;border-radius:16px;padding:18px 22px;box-sizing:border-box;}
+  .bigstatus .row1{font-size:22px;font-weight:700;color:#3fb950;display:flex;align-items:center;gap:14px;}
+  .bigstatus .row2{margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;}
+  .homebtn{position:absolute;right:22px;top:34px;}
+  .note{position:absolute;right:24px;bottom:96px;background:#0d141c;border:1px solid #30363d;border-radius:10px;color:#8b949e;font-size:12px;padding:8px 12px;}
+  .callout{position:absolute;left:22px;bottom:96px;color:#58a6ff;font-size:12px;}
+  .dim{background:#0b0f14;position:absolute;inset:0;opacity:.35;}
+  .hiddenbar{position:absolute;left:24px;right:24px;bottom:20px;display:flex;gap:12px;align-items:center;opacity:.92;}
+  .small{font-size:12px;color:#8b949e;}
+</style></head>
+<body><div class="page">
+<h1>主界面方案线框图</h1>
+<div class="sub">同一套设计语言下的三种信息架构；重点：一屏一个主操作、状态一眼可读、低频项下沉。</div>
+
+<div class="scheme">
+  <h2>方案 A：首页即记录仪控制台（推荐，改动最小）</h2>
+  <p>首页顶部显示记录状态和一键开始/停止；拼接/压缩降级为下方“工具”。冷启动到开始录像 1 次点击。</p>
+  <div class="frame">
+    <div class="topbar"><span class="rec">● 录像中 00:12:34</span><span class="chip">1080P · 30fps</span><span class="chip">剩余 18GB</span><span class="chip">GPS 31km/h</span><span class="ghost">设置 ⚙</span></div>
+    <div class="body">
+      <div class="preview" style="height:300px;"></div>
+      <div style="display:flex;gap:12px;margin-top:14px;">
+        <div class="btn red">停止录像（长按）</div>
+        <div class="btn dark">查看画面</div>
+        <div class="btn dark">录像文件</div>
+      </div>
+      <div class="homeTools">
+        <div class="tool"><b>四视角拼接</b><span>选择 4 路素材 → 合成</span></div>
+        <div class="tool"><b>视频压缩</b><span>按目标体积/比例转码</span></div>
+        <div class="tool"><b>更多</b><span>设置、帮助、关于</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="scheme">
+  <h2>方案 B：极简驾驶页 + 设置抽屉（推荐与 A 组合）</h2>
+  <p>驾驶中只保留画面、顶部状态、一个大按钮；5 秒无操作隐藏按钮；停止长按 1.5 秒；黑屏自动。</p>
+  <div class="frame">
+    <div class="topbar"><span class="rec">● 录像中 00:12:34</span><span class="chip">1080P · 30fps</span><span class="chip">剩余 18GB</span><span class="chip">GPS 31km/h</span></div>
+    <div class="body">
+      <div class="preview" style="height:430px;"></div>
+      <div class="note">5 秒无操作自动隐藏</div>
+      <div class="callout">点屏幕唤出控制</div>
+      <div class="bottombar">
+        <div class="btn red">长按停止录像</div>
+        <div class="iconbtn">文件</div>
+        <div class="iconbtn">黑屏</div>
+        <div class="iconbtn">更多</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="scheme">
+  <h2>方案 C：自动记录 + 管理页（零点击，需显式开启）</h2>
+  <p>启动/上车自动开录；首页变成管理页：记录横幅 + 最近片段 + 工具 + 设置。通知保留“停止录像”。</p>
+  <div class="frame">
+    <div class="topbar"><span class="rec">● 自动录像中 00:12:34</span><span class="chip">1080P · 30fps</span><span class="chip">剩余 18GB</span><span class="ghost">设置 ⚙</span></div>
+    <div class="body">
+      <div class="bigstatus">
+        <div class="row1">● 记录中 <span style="color:#8b949e;font-size:13px;font-weight:400;">已连续 12 分 34 秒</span></div>
+        <div class="row2"><span class="chip">最近片段 2 分钟前</span><span class="chip">今日 18 段</span><span class="chip">存储正常</span></div>
+      </div>
+      <div class="homebtn"><div class="btn red" style="min-width:210px;">停止录像</div></div>
+      <div style="position:absolute;left:22px;right:22px;top:180px;">
+        <div class="tool" style="margin-bottom:12px;"><b>最近录像</b><span>2026-11-27 19:49 · 4K · 1.0GB</span></div>
+        <div class="tool" style="margin-bottom:12px;"><b>四视角拼接</b><span>低频工具</span></div>
+        <div class="tool"><b>视频压缩</b><span>低频工具</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="small">说明：线框用于讨论信息层级与点击路径，不代表最终视觉稿；颜色/字号/图标需按真机横屏与眩光条件复核。</div>
+</div></body></html>
