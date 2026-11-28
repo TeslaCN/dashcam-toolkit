@@ -123,6 +123,12 @@ public class RecordingSession {
     private boolean adaptiveEv;
     private int adaptiveEvSteps;
     private double adaptiveSceneLuma = -1;
+    private int adaptiveSceneState = -1;
+    private int adaptiveSceneCandidate = -1;
+    private long adaptiveSceneCandidateSince;
+    private double solarElevation = Double.NaN;
+    private long lastSolarCalcMs;
+    private double solarCalcLat = 999, solarCalcLon = 999;
     private long lastAdaptiveEvMs;
     private long lastAdaptiveLogMs;
     private long lastAdaptiveEvStepMs;
@@ -1105,6 +1111,87 @@ public class RecordingSession {
     }
 
     /**
+     * 太阳高度角闸门：夜间（太阳 < -6°）绝不允许判成 DAY，避免路灯/车灯把场景照成
+     * "白天"后 EV 回到 0 导致车牌/高光大面积过曝（路测 19:45 出现过 EV0 + 50% 裁剪）。
+     */
+    private void updateSolarElevation(long nowMs) {
+        if (!status.gpsFix) return;
+        long wall = System.currentTimeMillis();
+        boolean moved = Math.abs(status.lat - solarCalcLat) > 0.01
+                || Math.abs(status.lon - solarCalcLon) > 0.01;
+        if (wall - lastSolarCalcMs < 30_000 && !moved) return;
+        lastSolarCalcMs = wall;
+        solarCalcLat = status.lat;
+        solarCalcLon = status.lon;
+        try {
+            java.util.Calendar c = java.util.Calendar.getInstance(
+                    java.util.TimeZone.getTimeZone("UTC"));
+            c.setTimeInMillis(wall);
+            int doy = c.get(java.util.Calendar.DAY_OF_YEAR);
+            double hour = c.get(java.util.Calendar.HOUR_OF_DAY)
+                    + c.get(java.util.Calendar.MINUTE) / 60.0;
+            double gamma = 2 * Math.PI / 365 * (doy - 1 + (hour - 12) / 24);
+            double eqTime = 229.18 * (0.000075 + 0.001868 * Math.cos(gamma)
+                    - 0.032077 * Math.sin(gamma) - 0.014615 * Math.cos(2 * gamma)
+                    - 0.040849 * Math.sin(2 * gamma));
+            double decl = 0.006918 - 0.399912 * Math.cos(gamma) + 0.070257 * Math.sin(gamma)
+                    - 0.006758 * Math.cos(2 * gamma) + 0.000907 * Math.sin(2 * gamma)
+                    - 0.002697 * Math.cos(3 * gamma) + 0.00148 * Math.sin(3 * gamma);
+            double trueSolarTime = hour * 60 + eqTime + 4 * status.lon;
+            double ha = Math.toRadians(trueSolarTime / 4 - 180);
+            double lat = Math.toRadians(status.lat);
+            solarElevation = Math.toDegrees(Math.asin(
+                    Math.sin(lat) * Math.sin(decl)
+                            + Math.cos(lat) * Math.cos(decl) * Math.cos(ha)));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 带太阳闸门 + 滞回 + 3s 稳定的场景状态机；避免 2↔3 每 20s 翻转。 */
+    private int updateAdaptiveScene(double norm, double solar, long nowMs) {
+        boolean sunKnown = !Double.isNaN(solar);
+        boolean nightBlocked = sunKnown && solar < -6.0;
+
+        int target;
+        if (adaptiveSceneState < 0) {
+            if ((sunKnown && solar < -12) || norm < 60) target = 3;
+            else if (norm > 450 && !nightBlocked) target = 1;
+            else target = 2;
+        } else {
+            switch (adaptiveSceneState) {
+                case 1: // DAY
+                    if (nightBlocked) target = norm < 60 ? 3 : 2;
+                    else target = norm < 380 ? 2 : 1;
+                    break;
+                case 2: // DUSK/TUNNEL
+                    if (norm < 60) target = 3;
+                    else target = (!nightBlocked && norm > 520) ? 1 : 2;
+                    break;
+                default: // NIGHT
+                    target = norm > 95 ? 2 : 3;
+                    break;
+            }
+        }
+
+        if (adaptiveSceneState < 0) {
+            adaptiveSceneState = target;
+            adaptiveSceneCandidate = -1;
+        } else if (target == adaptiveSceneState) {
+            adaptiveSceneCandidate = -1;
+        } else {
+            if (target != adaptiveSceneCandidate) {
+                adaptiveSceneCandidate = target;
+                adaptiveSceneCandidateSince = nowMs;
+            } else if (nowMs - adaptiveSceneCandidateSince >= 3000) {
+                adaptiveSceneState = target;
+                adaptiveSceneCandidate = -1;
+                Log.i("DashcamAEV", "scene switch -> " + target);
+            }
+        }
+        return adaptiveSceneState;
+    }
+
+    /**
      * 自适应 EV：系统 AE 负责曝光，我们只根据"曝光归一化场景亮度 + 高光裁剪"调整 EV。
      * 目标：夜间自动落到 -1.5 左右保护车牌，白天回到 0 避免车牌发黑，隧道/过渡 -1。
      * 比逐帧手动曝光稳，且不需要车牌检测。
@@ -1153,14 +1240,15 @@ public class RecordingSession {
             double exp = lastResultExposureNs > 0 ? lastResultExposureNs : 16_666_667.0;
             double iso = lastResultIso > 0 ? lastResultIso : 800.0;
             double norm = mean * (16_666_667.0 / exp) * (800.0 / iso);
-            if (adaptiveSceneLuma < 0) adaptiveSceneLuma = norm;
-            else adaptiveSceneLuma = 0.7 * adaptiveSceneLuma + 0.3 * norm;
-
-            int scene;
-            double a = adaptiveSceneLuma;
-            if (a < 80) scene = 3;        // night
-            else if (a < 400) scene = 2;  // dusk/tunnel
-            else scene = 1;               // day
+            if (adaptiveSceneLuma < 0) {
+                adaptiveSceneLuma = norm;
+                adaptiveSceneState = -1;
+                adaptiveSceneCandidate = -1;
+            } else {
+                adaptiveSceneLuma = 0.7 * adaptiveSceneLuma + 0.3 * norm;
+            }
+            updateSolarElevation(now);
+            int scene = updateAdaptiveScene(adaptiveSceneLuma, solarElevation, now);
             aeScene = scene;
 
             int baseSteps;
@@ -1180,6 +1268,7 @@ public class RecordingSession {
                         + " mean=" + Math.round(mean) + " p50=" + Math.round(p50)
                         + " p99=" + Math.round(p99)
                         + " clip=" + String.format(java.util.Locale.US, "%.1f", clipPct)
+                        + " sun=" + (Double.isNaN(solarElevation) ? "?" : Math.round(solarElevation))
                         + " exp=" + (lastResultExposureNs / 1000) + "us iso=" + lastResultIso
                         + " ev=" + (adaptiveEvSteps * 0.5f) + " -> " + (target * 0.5f));
             }
